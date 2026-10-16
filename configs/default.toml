@@ -1,0 +1,32 @@
+[project]
+name = "coinvision"
+seed = 42
+
+[data]
+source_dir = "data/source"
+manifest_dir = "data/manifests"
+train_manifest = "data/manifests/train.csv"
+val_manifest = "data/manifests/val.csv"
+val_fraction = 0.2
+image_size = 224
+num_workers = 4
+
+[model]
+backbone = "resnet18"
+pretrained = false
+num_digits = 4
+num_classes_per_digit = 10
+dropout = 0.2
+
+[train]
+epochs = 30
+batch_size = 32
+lr = 0.001
+weight_decay = 0.0001
+amp = false
+num_workers = 4
+out_dir = "runs"
+
+[infer]
+checkpoint = "runs/best.pt"
+device = "auto"

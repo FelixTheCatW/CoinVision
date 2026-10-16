@@ -1,0 +1,65 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "coinvision"
+version = "0.1.0"
+description = "Recognition of a coin's year from an image (PyTorch, CUDA 12.6 for Pascal GPUs)."
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+license = { text = "MIT" }
+authors = [{ name = "CoinVision" }]
+dependencies = [
+    "numpy>=1.26,<3",
+    "pillow>=10.3",
+    "tqdm>=4.66",
+    "torch>=2.7,<2.8",
+    "torchvision>=0.22,<0.23",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.6",
+    "mypy>=1.11",
+]
+
+[project.scripts]
+coinvision = "coinvision.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/coinvision"]
+
+[tool.uv]
+package = true
+
+# Pascal (sm_61) support was removed from the cu128/cu129 PyTorch wheels
+# (PyTorch >= 2.8). The GTX 1050 Ti therefore has to use the CUDA 12.6 line.
+[[tool.uv.index]]
+name = "pytorch-cu126"
+url = "https://download.pytorch.org/whl/cu126"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu126" }
+torchvision = { index = "pytorch-cu126" }
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.mypy]
+python_version = "3.12"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["torch", "torch.*", "torchvision", "torchvision.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--basetemp=.pytest-tmp"
