@@ -16,5 +16,7 @@ def test_parse_year_missing():
 def test_config_loads():
     root = Path(__file__).resolve().parents[1]
     config = load_config(root / "configs" / "default.toml")
-    assert config.data.image_size > 0
-    assert config.data.val_fraction > 0
+    assert len(config.data.image_size) == 2
+    assert all(side > 0 for side in config.data.image_size)
+    assert 0 < config.data.val_fraction < 1
+    assert config.model.num_digits == 4

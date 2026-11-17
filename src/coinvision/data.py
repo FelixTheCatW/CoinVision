@@ -34,7 +34,7 @@ def build_manifest(
         content: str | None = None
         if validate or dedup:
             probe = check_image_file(path, deep=True)
-            if not probe["ok"]:
+            if probe["status"] != "ok":
                 skipped_broken += 1
                 continue
             content = probe["pixel_sha256"]

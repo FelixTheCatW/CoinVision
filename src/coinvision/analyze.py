@@ -1,5 +1,4 @@
 from __future__ import annotations
-from __future__ import annotations
 
 import csv
 import hashlib
@@ -8,12 +7,11 @@ import sys
 from collections import Counter
 from pathlib import Path
 
+import pandas as pd
 from PIL import Image, UnidentifiedImageError
 from tqdm import tqdm
-import pandas as pd
-from .utils import parse_year, human_bytes
 
-DEFAULT_EXTENSIONS = (".webp", ".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".gif")
+from .utils import human_bytes, parse_year
 
 GRAYSCALE_MODES = {"1", "L", "LA", "I", "I;16", "I;16B", "I;16L", "F", "I;16N"}
 
@@ -130,8 +128,19 @@ def analyze_to_csv(
             image_paths, desc="analyze images", unit=" img", disable=bars_off
         )
         for path in inspect:
-            suffix = path.suffix.lower()
-            probe = check_image_file(path, deep=deep_check)
+            file_digest = ""
+            try:
+                file_digest = sha256_file(path)
+            except OSError as exc:
+                probe = {
+                    "status": "fail",
+                    "reason": "unreadable",
+                    "detail": str(exc),
+                    "bytes": "",
+                }
+            else:
+                probe = check_image_file(path, deep=deep_check)
+
             row: dict[str, object] = {
                 "image": path.as_posix(),
                 "year": parse_year(path) or "",
@@ -144,7 +153,7 @@ def analyze_to_csv(
                 "status": "",
                 "reason": "",
                 "detail": "",
-                "file_sha256": sha256_file(path),
+                "file_sha256": file_digest,
                 "pixel_sha256": "",
             }
 
@@ -173,8 +182,8 @@ def _resolution_stats(sizes: list[tuple[int, int]]) -> dict:
     heights = [h for _, h in sizes]
     return {
         "unique": len(set(sizes)),
-        "min": list(sizes[areas.index(min(areas))]),
-        "max": list(sizes[areas.index(max(areas))]),
+        "min": [int(value) for value in sizes[areas.index(min(areas))]],
+        "max": [int(value) for value in sizes[areas.index(max(areas))]],
         "width_mean": round(statistics.fmean(widths), 1),
         "height_mean": round(statistics.fmean(heights), 1),
     }
@@ -242,6 +251,56 @@ def format_report(stats: pd.Series) -> str:
     return stats.to_string()
 
 
+RESOLUTION_PERCENTILES = [0.01, 0.05, 0.25, 0.5, 0.75, 0.95, 0.99]
+
+
+def resolution_stats(df: pd.DataFrame) -> pd.DataFrame:
+    ok = df[df["status"].eq("ok")].copy()
+    for col in ("width", "height"):
+        ok[col] = pd.to_numeric(ok[col], errors="coerce")
+    ok = ok.dropna(subset=["width", "height"])
+    ok = ok[(ok["width"] > 0) & (ok["height"] > 0)]
+
+    metrics = {
+        "width": ok["width"].astype(float),
+        "height": ok["height"].astype(float),
+        "short_side": ok[["width", "height"]].min(axis=1).astype(float),
+        "aspect_ratio": (ok["width"] / ok["height"]).astype(float),
+        "megapixels": (ok["width"] * ok["height"] / 1_000_000).astype(float),
+    }
+
+    rows = []
+    for name, series in metrics.items():
+        if series.empty:
+            continue
+        desc = series.describe(percentiles=RESOLUTION_PERCENTILES)
+        rows.append(
+            {
+                "metric": name,
+                "count": int(desc["count"]),
+                "min": round(float(desc["min"]), 2),
+                "p1": round(float(desc["1%"]), 2),
+                "p5": round(float(desc["5%"]), 2),
+                "p25": round(float(desc["25%"]), 2),
+                "p50": round(float(desc["50%"]), 2),
+                "p75": round(float(desc["75%"]), 2),
+                "p95": round(float(desc["95%"]), 2),
+                "p99": round(float(desc["99%"]), 2),
+                "max": round(float(desc["max"]), 2),
+                "mean": round(float(desc["mean"]), 2),
+            }
+        )
+    return pd.DataFrame(rows).set_index("metric")
+
+
+def resolution_stats_from_csv(path: str | Path) -> pd.DataFrame:
+    return resolution_stats(pd.read_csv(path))
+
+
+def format_resolution_report(table: pd.DataFrame) -> str:
+    return table.to_string()
+
+
 def summary_from_csv(path: str | Path) -> dict:
     return summarize(pd.read_csv(path))
 
@@ -256,6 +315,19 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Analyze a coin image dataset into a CSV")
     parser.add_argument("directory")
-    parser.add_argument("--deep", help="full decode / verify")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument(
+        "--deep",
+        dest="deep_check",
+        action="store_true",
+        default=True,
+        help="full decode + pixel hashes (default)",
+    )
+    mode.add_argument(
+        "--shallow",
+        dest="deep_check",
+        action="store_false",
+        help="header-only check, no pixel hashes",
+    )
     args = parser.parse_args()
-    main(args.directory, deep_check=args.deep)
+    main(args.directory, deep_check=args.deep_check)

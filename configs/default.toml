@@ -8,7 +8,7 @@ manifest_dir = "data/manifests"
 train_manifest = "data/manifests/train.csv"
 val_manifest = "data/manifests/val.csv"
 val_fraction = 0.2
-image_size = 224
+image_size = [448, 224]
 num_workers = 4
 
 [model]

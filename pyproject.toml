@@ -6,12 +6,12 @@ build-backend = "hatchling.build"
 name = "coinvision"
 version = "0.1.0"
 description = "Recognition of a coin's year from an image (PyTorch, CUDA 12.6 for Pascal GPUs)."
-readme = "README.md"
 requires-python = ">=3.12,<3.13"
 license = { text = "MIT" }
 authors = [{ name = "CoinVision" }]
 dependencies = [
     "numpy>=1.26,<3",
+    "pandas>=2.2",
     "pillow>=10.3",
     "tqdm>=4.66",
     "torch>=2.7,<2.8",

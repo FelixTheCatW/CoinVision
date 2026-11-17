@@ -45,5 +45,7 @@ def test_hash_image_matches_file_hash_of_identical_files(tmp_path: Path):
     _save_gradient(tmp_path / "a.png")
     _save_gradient(tmp_path / "b.png")
 
-    assert hash_image(tmp_path / "a.png")["pixel_sha256"] == hash_image(tmp_path / "b.png")["pixel_sha256"]
+    a_pixels = hash_image(tmp_path / "a.png")["pixel_sha256"]
+    b_pixels = hash_image(tmp_path / "b.png")["pixel_sha256"]
+    assert a_pixels == b_pixels
     assert sha256_file(tmp_path / "a.png") == sha256_file(tmp_path / "b.png")

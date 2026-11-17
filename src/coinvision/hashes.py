@@ -9,7 +9,9 @@ from pathlib import Path
 from PIL import Image
 from tqdm import tqdm
 
-from .analyze import DEFAULT_EXTENSIONS, sha256_file
+from .analyze import EXTENSION_FORMATS, sha256_file
+
+DEFAULT_EXTENSIONS = tuple(EXTENSION_FORMATS)
 
 
 def hash_image(path: str | Path) -> dict:
