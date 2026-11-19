@@ -1,0 +1,13 @@
+# Experiment: double the input resolution (448x224 -> 896x448).
+#
+# Reason: the date occupies a small part of the coin, and at 448x224 the digits are only a few
+# dozen pixels high. Doubling the resolution keeps four times the pixels of the date in the crop.
+#
+# The batch has to shrink to fit the 4 GiB of the GTX 1050 Ti: activations grow fourfold, so 8
+# images per step use roughly the same memory as 32 did at the old resolution.
+
+[data]
+image_size = [896, 448]
+
+[train]
+batch_size = 8
