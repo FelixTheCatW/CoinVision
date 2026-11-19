@@ -156,6 +156,8 @@ def _cmd_train(args: argparse.Namespace, config: Config) -> int:
         config.data.cache = False
     if args.deterministic:
         config.train.deterministic = True
+    if args.class_weights is not None:
+        config.train.class_weighting = args.class_weights
 
     for manifest in (config.data.train_manifest, config.data.val_manifest):
         if not Path(manifest).is_file():
@@ -316,6 +318,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--deterministic",
         action="store_true",
         help="bit-reproducible CUDA kernels (slower, but two runs give the same numbers)",
+    )
+    train_parser.add_argument(
+        "--class-weights",
+        choices=("none", "balanced"),
+        default=None,
+        help="balanced = inverse-frequency weights per digit class",
     )
     train_parser.set_defaults(func=_cmd_train)
 

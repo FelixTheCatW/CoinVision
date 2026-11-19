@@ -5,6 +5,7 @@ import random
 import time
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass
+from functools import partial
 from pathlib import Path
 
 import torch
@@ -13,7 +14,7 @@ from torch.utils.data import DataLoader, Dataset
 
 from .cache import ImageCache
 from .config import Config
-from .dataset import CachedCoinDataset, CoinDataset, build_transform
+from .dataset import CachedCoinDataset, CoinDataset, build_transform, read_manifest, year_to_digits
 from .model import build_model
 from .utils import resolve_device, set_deterministic, set_seed
 
@@ -31,13 +32,46 @@ class EpochMetrics:
         return f"{prefix} loss={self.loss:.4f} year={self.year_accuracy:.3f} {digits}"
 
 
-def multihead_loss(logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
-    """Mean cross-entropy over the digit heads. logits: [B, D, C], targets: [B, D]."""
-    losses = [
-        nn.functional.cross_entropy(logits[:, index], targets[:, index])
-        for index in range(logits.shape[1])
-    ]
+def multihead_loss(
+    logits: torch.Tensor,
+    targets: torch.Tensor,
+    class_weights: list[torch.Tensor] | None = None,
+) -> torch.Tensor:
+    """Mean cross-entropy over the digit heads. logits: [B, D, C], targets: [B, D].
+
+    ``class_weights`` holds one [C] tensor per digit position; it rebalances rare years such as
+    1830 (21 training images) against 1832 (470).
+    """
+    losses = []
+    for index in range(logits.shape[1]):
+        weight = None if class_weights is None else class_weights[index]
+        losses.append(
+            nn.functional.cross_entropy(logits[:, index], targets[:, index], weight=weight)
+        )
     return torch.stack(losses).mean()
+
+
+def compute_class_weights(
+    samples: Sequence[tuple[object, Sequence[int]]],
+    num_digits: int,
+    num_classes: int,
+) -> list[torch.Tensor]:
+    """Balanced weights per digit position: N / (K * n_c) for classes that occur, 0 otherwise."""
+    counts = torch.zeros(num_digits, num_classes, dtype=torch.float)
+    for _, digits in samples:
+        for position, digit in enumerate(digits):
+            counts[position, int(digit)] += 1
+
+    weights = []
+    for position in range(num_digits):
+        row = counts[position]
+        present = row > 0
+        weight = torch.zeros(num_classes, dtype=torch.float)
+        present_classes = int(present.sum())
+        if present_classes:
+            weight[present] = float(row.sum()) / (present_classes * row[present])
+        weights.append(weight)
+    return weights
 
 
 def _collect(
@@ -255,6 +289,29 @@ def fit(config: Config, device_spec: str | None = None) -> dict:
         model.parameters(), lr=config.train.lr, weight_decay=config.train.weight_decay
     )
 
+    criterion = multihead_loss
+    if config.train.class_weighting != "none":
+        if config.train.class_weighting != "balanced":
+            raise ValueError(
+                f"unsupported class_weighting {config.train.class_weighting!r}: "
+                "use 'none' or 'balanced'"
+            )
+        rows = read_manifest(config.data.train_manifest)
+        weights = compute_class_weights(
+            [(path, year_to_digits(year, num_digits)) for path, year in rows],
+            num_digits,
+            config.model.num_classes_per_digit,
+        )
+        class_weights = [weight.to(device) for weight in weights]
+        criterion = partial(multihead_loss, class_weights=class_weights)
+        last_digit = class_weights[-1]
+        shown = ", ".join(
+            f"{index}:{float(last_digit[index]):.2f}"
+            for index in range(last_digit.numel())
+            if float(last_digit[index]) > 0
+        )
+        print(f"balanced class weights (last digit) -> {shown}", flush=True)
+
     out_dir = Path(config.train.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     meta = {
@@ -269,7 +326,8 @@ def fit(config: Config, device_spec: str | None = None) -> dict:
     best_state: dict[str, torch.Tensor] | None = None
     for epoch in range(1, config.train.epochs + 1):
         epoch_started = time.perf_counter()
-        train_metrics = train_epoch(model, train_loader, optimizer, device, multihead_loss)
+        train_metrics = train_epoch(model, train_loader, optimizer, device, criterion)
+        # validation loss stays unweighted so runs with and without class weights are comparable
         val_metrics = evaluate(model, val_loader, device, multihead_loss)
         epoch_seconds = time.perf_counter() - epoch_started
         print(

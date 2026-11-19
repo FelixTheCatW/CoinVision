@@ -46,6 +46,7 @@ class TrainConfig:
     amp: bool = False
     num_workers: int = 4
     deterministic: bool = False
+    class_weighting: str = "none"
     out_dir: str = "runs"
 
 

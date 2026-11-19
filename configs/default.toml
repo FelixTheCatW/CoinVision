@@ -30,6 +30,7 @@ weight_decay = 0.0001
 amp = false
 num_workers = 4
 deterministic = false
+class_weighting = "none"
 out_dir = "runs"
 
 [infer]

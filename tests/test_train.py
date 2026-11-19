@@ -10,6 +10,7 @@ from torch.utils.data import DataLoader, TensorDataset
 from coinvision.config import Config
 from coinvision.infer import CoinPredictor
 from coinvision.train import (
+    compute_class_weights,
     fit,
     format_last_digit_report,
     last_digit_report,
@@ -149,3 +150,53 @@ def test_multihead_loss_is_mean_over_heads():
     confident[:, 0, 0] = 5.0
 
     assert float(multihead_loss(confident, targets)) < baseline
+
+
+def test_compute_class_weights_balances_rare_classes():
+    samples = [(None, [1, 8, 3, 2])] * 6 + [(None, [1, 8, 3, 0])] * 2
+
+    weights = compute_class_weights(samples, num_digits=4, num_classes=10)
+
+    last = weights[-1]
+    # 8 samples over 2 present classes: 8 / (2 * 6) and 8 / (2 * 2)
+    assert float(last[2]) == pytest.approx(8 / 12)
+    assert float(last[0]) == pytest.approx(8 / 4)
+    assert float(last[5]) == 0.0
+    # the constant prefix position keeps weight 1.0 for its single class
+    assert float(weights[0][1]) == pytest.approx(1.0)
+    assert float(weights[0][8]) == 0.0
+
+
+def test_multihead_loss_upweights_rare_class():
+    logits = torch.zeros(2, 4, 10)
+    targets = torch.tensor([[1, 8, 3, 0], [1, 8, 3, 2]])
+    # the rare class (0) is confidently wrong, the common one (2) is confidently right, so
+    # upweighting class 0 must raise the mean loss
+    logits[0, -1, 0] = -3.0
+    logits[1, -1, 2] = 3.0
+
+    plain = float(multihead_loss(logits, targets))
+    weights = [torch.ones(10) for _ in range(4)]
+    weights[-1][0] = 5.0
+
+    assert float(multihead_loss(logits, targets, class_weights=weights)) > plain
+
+
+def test_fit_rejects_unknown_class_weighting(tmp_path: Path):
+    train_csv, val_csv = _tiny_dataset(tmp_path)
+    config = _config(tmp_path, train_csv, val_csv)
+    config.train.class_weighting = "sqrt-balanced"
+
+    with pytest.raises(ValueError):
+        fit(config, device_spec="cpu")
+
+
+def test_fit_runs_with_balanced_class_weights(tmp_path: Path):
+    train_csv, val_csv = _tiny_dataset(tmp_path)
+    config = _config(tmp_path, train_csv, val_csv)
+    config.train.class_weighting = "balanced"
+
+    result = fit(config, device_spec="cpu")
+
+    assert result["metrics_path"].endswith("metrics.json")
+    assert result["val_last_digit"]["num_samples"] == 2
