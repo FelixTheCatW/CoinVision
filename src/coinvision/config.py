@@ -90,10 +90,34 @@ def _build(cls: Any, values: dict[str, Any] | None) -> Any:
     return cls(**kwargs)
 
 
-def load_config(path: str | Path = DEFAULT_CONFIG_PATH) -> Config:
-    """Load a TOML config; every section and key is optional and falls back to defaults."""
+def _read_toml(path: str | Path) -> dict[str, Any]:
     with Path(path).open("rb") as fh:
-        raw = tomllib.load(fh)
+        return tomllib.load(fh)
+
+
+def _overlay(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    """Merge TOML documents: section by section, override wins on the keys it defines."""
+    merged = {section: dict(values) for section, values in base.items()}
+    for section, values in override.items():
+        merged[section] = {**merged.get(section, {}), **values}
+    return merged
+
+
+def load_config(
+    path: str | Path = DEFAULT_CONFIG_PATH,
+    base: str | Path | None = DEFAULT_CONFIG_PATH,
+) -> Config:
+    """Load a TOML config, layered on top of ``base`` (the project config by default).
+
+    A partial experiment file therefore inherits every setting it does not mention from
+    configs/default.toml instead of silently falling back to the dataclass defaults - which is how
+    an experiment once lost ``pretrained = true`` and trained from scratch.
+    """
+    raw = _read_toml(path)
+    if base is not None:
+        base_path, path_obj = Path(base), Path(path)
+        if base_path.is_file() and base_path.resolve() != path_obj.resolve():
+            raw = _overlay(_read_toml(base_path), raw)
 
     return Config(
         project=_build(ProjectConfig, raw.get("project")),
