@@ -11,6 +11,7 @@ val_fraction = 0.2
 image_size = [448, 224]
 num_workers = 4
 augment = false
+cache = true
 
 [model]
 backbone = "resnet18"
@@ -28,6 +29,7 @@ lr = 0.001
 weight_decay = 0.0001
 amp = false
 num_workers = 4
+deterministic = false
 out_dir = "runs"
 
 [infer]
