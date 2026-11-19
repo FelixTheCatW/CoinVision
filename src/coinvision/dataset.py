@@ -54,6 +54,86 @@ def build_cached_transform(augment: bool = False) -> v2.Compose:
     return v2.Compose(ops)
 
 
+STACK_VIEWS = ("full", "label", "date")
+"""Views concatenated along the channels: the whole frame, the slab label (top-left) and the
+engraved date (bottom-right). A single forward pass sees all of them, so the network learns which
+view carries the year for a given photo instead of us guessing the photo type."""
+
+VIEW_SPECS: dict[str, tuple[float, str]] = {
+    "full": (1.0, "centre"),
+    "label": (0.35, "top_left"),
+    "date": (0.35, "bottom_right"),
+}
+
+
+def view_window(
+    width: int, height: int, aspect: float, scale: float, anchor: str
+) -> tuple[int, int, int, int]:
+    """Deterministic (left, top, width, height) window with the requested aspect."""
+    crop_h = max(8, int(round(height * scale)))
+    crop_w = max(8, int(round(crop_h * aspect)))
+    if crop_w > width:
+        crop_w = width
+        crop_h = max(8, int(round(crop_w / aspect)))
+    if crop_h > height:
+        crop_h = height
+        crop_w = max(8, int(round(crop_h * aspect)))
+
+    if anchor == "top_left":
+        left, top = 0, 0
+    elif anchor == "bottom_right":
+        left, top = width - crop_w, height - crop_h
+    else:
+        left, top = (width - crop_w) // 2, (height - crop_h) // 2
+    return left, top, crop_w, crop_h
+
+
+class StackedViewsDataset(Dataset):
+    """One sample = several deterministic views of the photo, concatenated along the channels."""
+
+    def __init__(
+        self,
+        manifest: str | Path,
+        cache: ImageCache,
+        view_size: tuple[int, int] = (448, 224),
+        num_digits: int = 4,
+        views: tuple[str, ...] = STACK_VIEWS,
+        transform: v2.Compose | None = None,
+    ) -> None:
+        unknown = set(views) - set(VIEW_SPECS)
+        if unknown:
+            raise ValueError(f"unknown views: {sorted(unknown)}")
+        self.manifest = Path(manifest)
+        self.cache = cache
+        self.views = views
+        self.num_digits = num_digits
+        self.out_width, self.out_height = int(view_size[0]), int(view_size[1])
+        self.aspect = self.out_width / self.out_height
+        self.transform = transform if transform is not None else build_cached_transform()
+        self.samples = [
+            (path, year_to_digits(year, num_digits)) for path, year in read_manifest(self.manifest)
+        ]
+        self.cache.preload(str(path) for path, _ in self.samples)
+
+    def __len__(self) -> int:
+        return len(self.samples)
+
+    def __getitem__(self, index: int) -> tuple[torch.Tensor, torch.Tensor]:
+        path, digits = self.samples[index]
+        image = self.cache.get(path)
+        _, height, width = image.shape
+        pieces = []
+        for view in self.views:
+            scale, anchor = VIEW_SPECS[view]
+            left, top, crop_w, crop_h = view_window(width, height, self.aspect, scale, anchor)
+            window = v2.functional.crop(image, top, left, crop_h, crop_w)
+            window = v2.functional.resize(
+                window, [self.out_height, self.out_width], antialias=True
+            )
+            pieces.append(self.transform(window))
+        return torch.cat(pieces, dim=0), torch.tensor(digits, dtype=torch.long)
+
+
 def read_manifest(path: str | Path) -> list[tuple[Path, str]]:
     with Path(path).open(newline="", encoding="utf-8") as fh:
         return [(Path(row["image"]), row["year"]) for row in csv.DictReader(fh)]

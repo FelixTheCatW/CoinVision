@@ -1,0 +1,10 @@
+# Experiment: stack three views of the photo along the channels (whole frame, slab label, engraved
+# date) and let the network decide which one carries the year.
+#
+# Why: the audit showed the year is either printed on the slab label or engraved tiny at the bottom
+# of the reverse, and at 448x224 for the whole photo it is unreadable. Mixing crops as separate
+# samples (crop-448) diluted the supervision; here every sample carries all views at once, and the
+# first convolution is widened from 3 to 9 channels with the pretrained filters repeated.
+
+[data]
+stack_views = true

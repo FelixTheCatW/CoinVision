@@ -25,7 +25,9 @@ class CoinPredictor:
     ) -> CoinPredictor:
         device = resolve_device(device_spec)
         payload = torch.load(Path(checkpoint), map_location=device, weights_only=False)
-        model = build_model(ModelConfig(**payload["model_config"])).to(device)
+        model = build_model(
+            ModelConfig(**payload["model_config"]), in_channels=int(payload.get("in_channels", 3))
+        ).to(device)
         model.load_state_dict(payload["model"])
         model.eval()
         transform = build_transform(tuple(payload.get("image_size", (448, 224))))

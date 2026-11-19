@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import cast
+
 import torch
 from torch import nn
 from torchvision import models
@@ -39,8 +41,35 @@ def _build_backbone(name: str, pretrained: bool) -> tuple[nn.Module, int]:
     return backbone, int(in_features)
 
 
-def build_model(config: ModelConfig) -> CoinNet:
+def _adapt_first_conv(backbone: nn.Module, in_channels: int) -> None:
+    """Widen conv1 for stacked views, keeping the pretrained filters (repeated, rescaled)."""
+    if in_channels == 3:
+        return
+    if in_channels % 3 != 0:
+        raise ValueError(f"in_channels must be a multiple of 3, got {in_channels}")
+    conv = cast(nn.Conv2d, backbone.conv1)
+    kernel = int(conv.kernel_size[0])
+    stride = int(conv.stride[0])
+    padding = int(conv.padding[0])
+    widened = nn.Conv2d(
+        in_channels,
+        conv.out_channels,
+        kernel,
+        stride,
+        padding,
+        bias=conv.bias is not None,
+    )
+    repeats = in_channels // 3
+    with torch.no_grad():
+        widened.weight.copy_(conv.weight.repeat(1, repeats, 1, 1) / repeats)
+        if conv.bias is not None and widened.bias is not None:
+            widened.bias.copy_(conv.bias)
+    backbone.conv1 = widened
+
+
+def build_model(config: ModelConfig, in_channels: int = 3) -> CoinNet:
     backbone, in_features = _build_backbone(config.backbone, config.pretrained)
+    _adapt_first_conv(backbone, in_channels)
     return CoinNet(
         backbone,
         in_features,

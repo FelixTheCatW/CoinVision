@@ -21,11 +21,18 @@ UINT8_BYTES_PER_IMAGE = 3 * 448 * 224
 
 
 class ImageCache:
-    """Decoded uint8 (CHW) pixels for a fixed image size, shared by every dataset."""
+    """Decoded uint8 (CHW) pixels, shared by every dataset.
 
-    def __init__(self, image_size: tuple[int, int]) -> None:
-        self.width = int(image_size[0])
-        self.height = int(image_size[1])
+    ``image_size=None`` keeps the native resolution: the date is only a few dozen pixels high in
+    the original photo and any earlier resize destroys it.
+    """
+
+    def __init__(self, image_size: tuple[int, int] | None) -> None:
+        if image_size is None:
+            self.width = self.height = 0
+        else:
+            self.width = int(image_size[0])
+            self.height = int(image_size[1])
         self._tensors: dict[str, torch.Tensor] = {}
         self._lock = threading.Lock()
 
@@ -77,5 +84,7 @@ class ImageCache:
     def _read(self, path: str) -> torch.Tensor:
         with Image.open(path) as handle:
             image = v2.functional.to_image(handle.convert("RGB"))
+        if self.width == 0:
+            return image.contiguous()
         resized = v2.functional.resize(image, [self.height, self.width], antialias=True)
         return resized.contiguous()

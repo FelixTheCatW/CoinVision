@@ -13,7 +13,13 @@ from torch.utils.data import DataLoader, Dataset
 
 from .cache import ImageCache
 from .config import Config
-from .dataset import CachedCoinDataset, CoinDataset, build_transform
+from .dataset import (
+    STACK_VIEWS,
+    CachedCoinDataset,
+    CoinDataset,
+    StackedViewsDataset,
+    build_transform,
+)
 from .model import build_model
 from .utils import resolve_device, set_deterministic, set_seed
 
@@ -206,7 +212,23 @@ def fit(config: Config, device_spec: str | None = None) -> dict:
 
     train_dataset: Dataset
     val_dataset: Dataset
-    if config.data.cache:
+    in_channels = 3
+    if config.data.stack_views:
+        cache = ImageCache(None)
+        started = time.perf_counter()
+        train_dataset = StackedViewsDataset(
+            config.data.train_manifest, cache, config.data.image_size, num_digits
+        )
+        val_dataset = StackedViewsDataset(
+            config.data.val_manifest, cache, config.data.image_size, num_digits
+        )
+        in_channels = 3 * len(STACK_VIEWS)
+        print(
+            f"\nimage cache (native): {len(cache)} images in {time.perf_counter() - started:.1f}s "
+            f"({cache.memory_bytes() / 1024**3:.1f} GiB RAM), {len(STACK_VIEWS)} stacked views",
+            flush=True,
+        )
+    elif config.data.cache:
         cache = ImageCache(config.data.image_size)
         started = time.perf_counter()
         train_dataset = CachedCoinDataset(
@@ -250,7 +272,7 @@ def fit(config: Config, device_spec: str | None = None) -> dict:
     )
     val_loader = DataLoader(val_dataset, shuffle=False, **loader_kwargs)
 
-    model = build_model(config.model).to(device)
+    model = build_model(config.model, in_channels=in_channels).to(device)
     optimizer = torch.optim.AdamW(
         model.parameters(), lr=config.train.lr, weight_decay=config.train.weight_decay
     )
@@ -261,6 +283,7 @@ def fit(config: Config, device_spec: str | None = None) -> dict:
         "model_config": asdict(config.model),
         "image_size": list(config.data.image_size),
         "project": asdict(config.project),
+        "in_channels": in_channels,
     }
 
     history: list[dict] = []
