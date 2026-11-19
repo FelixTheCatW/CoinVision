@@ -1,7 +1,9 @@
 # Experiment: twice the epochs of configs/default.toml.
 #
-# Reason: in the 5-fold baseline every fold was still improving at the 30-epoch cutoff
-# (best epoch 30, 28, 25, 30, 29), so the model is under-trained rather than saturated.
+# Measured outcome (5 folds, grouped, deterministic): last-digit accuracy 0.8588 +- 0.0154 versus
+# 0.8519 +- 0.0178 at 30 epochs. Three folds produced identical numbers and identical best epochs
+# (28, 25, 30), so the model saturates around epoch 25-31; only one fold gained (epoch 57, +2.3 pp).
+# The extra budget is not where the accuracy is; kept here as the record of that measurement.
 
 [train]
 epochs = 60
