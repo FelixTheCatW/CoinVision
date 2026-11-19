@@ -89,13 +89,41 @@ def _cmd_split(args: argparse.Namespace, config: Config) -> int:
     if not manifest.is_file():
         return _fail(f"manifest not found: {manifest}")
 
-    val_fraction = config.data.val_fraction if args.val_fraction is None else args.val_fraction
     seed = config.project.seed if args.seed is None else args.seed
+    if args.folds is not None:
+        out_dir = args.out_dir or str(Path(config.data.manifest_dir) / f"folds{args.folds}")
+        fold_counts = data.make_folds(
+            manifest,
+            out_dir,
+            folds=args.folds,
+            seed=seed,
+            group_by_listing=not args.no_group_listing,
+        )
+        print(f"folds = {args.folds}, seed = {seed}, grouping = {not args.no_group_listing}")
+        for name, counts_per_fold in fold_counts.items():
+            print(
+                f"{name}: train {counts_per_fold['train']} rows, "
+                f"val {counts_per_fold['val']} rows"
+            )
+        print(f"manifests -> {out_dir}")
+        return 0
+
+    val_fraction = config.data.val_fraction if args.val_fraction is None else args.val_fraction
     train_csv = args.train or config.data.train_manifest
     val_csv = args.val or config.data.val_manifest
 
-    counts = data.split_manifest(manifest, train_csv, val_csv, val_fraction=val_fraction, seed=seed)
-    print(f"val_fraction = {val_fraction}, seed = {seed}")
+    counts = data.split_manifest(
+        manifest,
+        train_csv,
+        val_csv,
+        val_fraction=val_fraction,
+        seed=seed,
+        group_by_listing=args.group_listing,
+    )
+    print(
+        f"val_fraction = {val_fraction}, seed = {seed}, "
+        f"grouping = {args.group_listing}"
+    )
     print(f"train -> {train_csv} ({counts['train']} rows)")
     print(f"val   -> {val_csv} ({counts['val']} rows)")
     return 0
@@ -120,6 +148,14 @@ def _cmd_train(args: argparse.Namespace, config: Config) -> int:
         config.train.batch_size = args.batch_size
     if args.out_dir is not None:
         config.train.out_dir = args.out_dir
+    if args.train_manifest is not None:
+        config.data.train_manifest = args.train_manifest
+    if args.val_manifest is not None:
+        config.data.val_manifest = args.val_manifest
+    if args.no_cache:
+        config.data.cache = False
+    if args.deterministic:
+        config.train.deterministic = True
 
     for manifest in (config.data.train_manifest, config.data.val_manifest):
         if not Path(manifest).is_file():
@@ -239,6 +275,22 @@ def build_parser() -> argparse.ArgumentParser:
     split_parser.add_argument("--val", default=None)
     split_parser.add_argument("--val-fraction", type=float, default=None)
     split_parser.add_argument("--seed", type=int, default=None)
+    split_parser.add_argument(
+        "--group-listing",
+        action="store_true",
+        help="keep every shot of one listing inside a single split",
+    )
+    split_parser.add_argument(
+        "--folds", type=int, default=None, help="write this many stratified fold manifests"
+    )
+    split_parser.add_argument(
+        "--out-dir", default=None, help="where fold manifests go (default: data/manifests/foldsN)"
+    )
+    split_parser.add_argument(
+        "--no-group-listing",
+        action="store_true",
+        help="with --folds: ignore listing groups (leaky, for comparison only)",
+    )
     split_parser.set_defaults(func=_cmd_split)
 
     config_parser = subparsers.add_parser("config", help="print the resolved config")
@@ -249,6 +301,22 @@ def build_parser() -> argparse.ArgumentParser:
     train_parser.add_argument("--batch-size", type=int, default=None)
     train_parser.add_argument("--out-dir", default=None)
     train_parser.add_argument("--device", default=None, help="auto / cuda / cpu")
+    train_parser.add_argument(
+        "--train-manifest", default=None, help="override data.train_manifest (e.g. a CV fold)"
+    )
+    train_parser.add_argument(
+        "--val-manifest", default=None, help="override data.val_manifest (e.g. a CV fold)"
+    )
+    train_parser.add_argument(
+        "--no-cache",
+        action="store_true",
+        help="decode images every epoch instead of using the in-memory pixel cache",
+    )
+    train_parser.add_argument(
+        "--deterministic",
+        action="store_true",
+        help="bit-reproducible CUDA kernels (slower, but two runs give the same numbers)",
+    )
     train_parser.set_defaults(func=_cmd_train)
 
     predict_parser = subparsers.add_parser("predict", help="predict the year of one coin image")

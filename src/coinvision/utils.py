@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import random
 import re
 from pathlib import Path
@@ -24,6 +25,23 @@ def set_seed(seed: int) -> None:
         torch.cuda.manual_seed_all(seed)
     except ImportError:
         pass
+
+
+def set_deterministic(enabled: bool = True) -> None:
+    """Make CUDA kernels bit-reproducible (usually slower) or restore the torch defaults.
+
+    Without this, the same seed still yields slightly different gradients between runs, because
+    cuDNN may pick atomicAdd-based backward kernels whose float summation order is unspecified.
+    """
+    import torch
+
+    if enabled:
+        # cuBLAS needs a fixed workspace to stay deterministic; must be set before its first call.
+        os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
+
+    torch.backends.cudnn.deterministic = enabled
+    torch.backends.cudnn.benchmark = False
+    torch.use_deterministic_algorithms(enabled)
 
 
 def resolve_device(spec: str = "auto"):

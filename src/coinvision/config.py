@@ -24,6 +24,7 @@ class DataConfig:
     image_size: tuple[int, int] = (448, 224)
     num_workers: int = 4
     augment: bool = False
+    cache: bool = True
     extensions: tuple[str, ...] = (".webp", ".jpg", ".jpeg", ".png", ".bmp")
 
 
@@ -44,6 +45,7 @@ class TrainConfig:
     weight_decay: float = 0.0001
     amp: bool = False
     num_workers: int = 4
+    deterministic: bool = False
     out_dir: str = "runs"
 
 

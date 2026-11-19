@@ -1,18 +1,21 @@
 from __future__ import annotations
 
 import json
+import random
+import time
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
 import torch
 from torch import nn
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Dataset
 
+from .cache import ImageCache
 from .config import Config
-from .dataset import CoinDataset, build_transform
+from .dataset import CachedCoinDataset, CoinDataset, build_transform
 from .model import build_model
-from .utils import resolve_device, set_seed
+from .utils import resolve_device, set_deterministic, set_seed
 
 
 @dataclass
@@ -185,32 +188,66 @@ def format_last_digit_report(report: dict) -> str:
     return "\n".join(lines)
 
 
+def _seed_worker(worker_id: int) -> None:
+    """Seed a loader worker from its torch seed so augmentation does not depend on spawn order."""
+    import numpy as np
+
+    seed = (torch.initial_seed() + worker_id) % 2**32
+    random.seed(seed)
+    np.random.seed(seed)
+
+
 def fit(config: Config, device_spec: str | None = None) -> dict:
     """Train the digit-head model and write best.pt/last.pt into config.train.out_dir."""
     set_seed(config.project.seed)
+    set_deterministic(config.train.deterministic)
     device = resolve_device(device_spec or config.infer.device)
-    train_transform = build_transform(config.data.image_size, augment=config.data.augment)
-    val_transform = build_transform(config.data.image_size)
     num_digits = config.model.num_digits
 
-    train_dataset = CoinDataset(
-        config.data.train_manifest, config.data.image_size, num_digits, train_transform
-    )
-    val_dataset = CoinDataset(
-        config.data.val_manifest, config.data.image_size, num_digits, val_transform
-    )
+    train_dataset: Dataset
+    val_dataset: Dataset
+    if config.data.cache:
+        cache = ImageCache(config.data.image_size)
+        started = time.perf_counter()
+        train_dataset = CachedCoinDataset(
+            config.data.train_manifest, cache, num_digits, augment=config.data.augment
+        )
+        val_dataset = CachedCoinDataset(config.data.val_manifest, cache, num_digits)
+        print(
+            f"\nimage cache: {len(cache)} images in {time.perf_counter() - started:.1f}s "
+            f"({cache.memory_bytes() / 1024**2:.0f} MiB RAM)",
+            flush=True,
+        )
+    else:
+        train_transform = build_transform(config.data.image_size, augment=config.data.augment)
+        val_transform = build_transform(config.data.image_size)
+        train_dataset = CoinDataset(
+            config.data.train_manifest, config.data.image_size, num_digits, train_transform
+        )
+        val_dataset = CoinDataset(
+            config.data.val_manifest, config.data.image_size, num_digits, val_transform
+        )
 
+    # With the pixel cache the per-sample work is a lookup plus a normalise (~1 ms), and spawning
+    # workers would hand every one of them its own copy of the 500 MiB cache, so the loader runs
+    # in-process instead.
     loader_kwargs = {
         "batch_size": config.train.batch_size,
-        "num_workers": config.train.num_workers,
+        "num_workers": 0 if config.data.cache else config.train.num_workers,
         "pin_memory": device.type == "cuda",
     }
-    if config.train.num_workers > 0:
+    if loader_kwargs["num_workers"] > 0:
         # On Windows every worker costs several seconds of spawning, so keep them alive
         # across epochs instead of paying that per epoch (measured: 10 -> 56 img/s).
         loader_kwargs["persistent_workers"] = True
         loader_kwargs["prefetch_factor"] = 4
-    train_loader = DataLoader(train_dataset, shuffle=True, **loader_kwargs)
+        loader_kwargs["worker_init_fn"] = _seed_worker
+    # A dedicated generator keeps the shuffle order independent of every other RNG consumer, so a
+    # fixed seed really means the same batches (and, with deterministic=True, the same numbers).
+    shuffle_generator = torch.Generator().manual_seed(config.project.seed)
+    train_loader = DataLoader(
+        train_dataset, shuffle=True, generator=shuffle_generator, **loader_kwargs
+    )
     val_loader = DataLoader(val_dataset, shuffle=False, **loader_kwargs)
 
     model = build_model(config.model).to(device)
@@ -231,10 +268,12 @@ def fit(config: Config, device_spec: str | None = None) -> dict:
     best_epoch = 0
     best_state: dict[str, torch.Tensor] | None = None
     for epoch in range(1, config.train.epochs + 1):
+        epoch_started = time.perf_counter()
         train_metrics = train_epoch(model, train_loader, optimizer, device, multihead_loss)
         val_metrics = evaluate(model, val_loader, device, multihead_loss)
+        epoch_seconds = time.perf_counter() - epoch_started
         print(
-            f"epoch {epoch}/{config.train.epochs} | "
+            f"epoch {epoch}/{config.train.epochs} ({epoch_seconds:.1f}s) | "
             f"{train_metrics.format('train')} | {val_metrics.format('val')}",
             flush=True,
         )

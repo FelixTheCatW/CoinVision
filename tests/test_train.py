@@ -5,6 +5,7 @@ import pandas as pd
 import pytest
 import torch
 from PIL import Image
+from torch.utils.data import DataLoader, TensorDataset
 
 from coinvision.config import Config
 from coinvision.infer import CoinPredictor
@@ -124,6 +125,19 @@ def test_format_last_digit_report_prints_header_and_accuracy():
     assert "acc=1.000" in text
     assert "true\\pred" in text
     assert text.count("\n") >= 2
+
+
+def test_seeded_shuffle_generator_repeats_the_same_batches():
+    def order() -> list[int]:
+        loader = DataLoader(
+            TensorDataset(torch.arange(12)),
+            batch_size=4,
+            shuffle=True,
+            generator=torch.Generator().manual_seed(42),
+        )
+        return [int(value) for (batch,) in loader for value in batch]
+
+    assert order() == order()
 
 
 def test_multihead_loss_is_mean_over_heads():
