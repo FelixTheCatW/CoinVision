@@ -1,0 +1,7 @@
+# Experiment: twice the epochs of configs/default.toml.
+#
+# Reason: in the 5-fold baseline every fold was still improving at the 30-epoch cutoff
+# (best epoch 30, 28, 25, 30, 29), so the model is under-trained rather than saturated.
+
+[train]
+epochs = 60
