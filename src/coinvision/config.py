@@ -25,6 +25,7 @@ class DataConfig:
     num_workers: int = 4
     augment: bool = False
     cache: bool = True
+    crop: bool = False
     extensions: tuple[str, ...] = (".webp", ".jpg", ".jpeg", ".png", ".bmp")
 
 
@@ -46,6 +47,7 @@ class TrainConfig:
     amp: bool = False
     num_workers: int = 4
     deterministic: bool = False
+    tta_variants: int = 1
     out_dir: str = "runs"
 
 

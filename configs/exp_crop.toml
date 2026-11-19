@@ -1,0 +1,14 @@
+# Experiment: feed 2:1 windows cropped out of the native photo instead of the whole coin.
+#
+# The audit of the 260 worst errors showed the labels are right and the model is confidently wrong
+# (p_true ~ 0.000): at 448x224 for the whole 1608x800 photo the engraved date is a few pixels tall,
+# so the network can only guess between years whose coin design is identical. A 2:1 window around
+# the date (or around the slab label) keeps the digits readable at the same input size.
+#
+# tta_variants = 3 averages the uniform, date and label views at evaluation time.
+
+[data]
+crop = true
+
+[train]
+tta_variants = 3

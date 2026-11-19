@@ -13,7 +13,13 @@ from torch.utils.data import DataLoader, Dataset
 
 from .cache import ImageCache
 from .config import Config
-from .dataset import CachedCoinDataset, CoinDataset, build_transform
+from .dataset import (
+    CROP_ANCHORS,
+    CachedCoinDataset,
+    CoinDataset,
+    CroppedCoinDataset,
+    build_transform,
+)
 from .model import build_model
 from .utils import resolve_device, set_deterministic, set_seed
 
@@ -175,6 +181,36 @@ def evaluate_last_digit(
     return last_digit_report(targets, predictions, num_classes)
 
 
+def evaluate_last_digit_tta(
+    model: nn.Module,
+    loaders: Sequence[DataLoader],
+    device: torch.device,
+    num_classes: int = 10,
+) -> dict:
+    """Average the last-digit probabilities over several crop views of the same images."""
+    if not loaders:
+        raise ValueError("no loaders to average over")
+
+    model.eval()
+    summed: torch.Tensor | None = None
+    targets: list[int] = []
+    for loader in loaders:
+        view_probs: list[torch.Tensor] = []
+        view_targets: list[int] = []
+        with torch.no_grad():
+            for images, batch_targets in loader:
+                logits = model(images.to(device))[:, -1]
+                view_probs.append(logits.softmax(dim=-1).cpu())
+                view_targets.extend(batch_targets[:, -1].tolist())
+        probs = torch.cat(view_probs)
+        summed = probs if summed is None else summed + probs
+        targets = view_targets
+
+    if summed is None:
+        raise ValueError("no batches processed: the dataset or manifest is empty")
+    return last_digit_report(targets, summed.argmax(dim=-1).tolist(), num_classes)
+
+
 def format_last_digit_report(report: dict) -> str:
     labels = report["labels"]
     lines = [
@@ -206,7 +242,39 @@ def fit(config: Config, device_spec: str | None = None) -> dict:
 
     train_dataset: Dataset
     val_dataset: Dataset
-    if config.data.cache:
+    tta_datasets: list[Dataset] = []
+    if config.data.crop:
+        # Native-resolution pixels: the crop pipeline needs the date at its original size.
+        cache = ImageCache(None)
+        started = time.perf_counter()
+        train_dataset = CroppedCoinDataset(
+            config.data.train_manifest,
+            cache,
+            config.data.image_size,
+            num_digits,
+            variant="random",
+            augment=config.data.augment,
+        )
+        val_dataset = CroppedCoinDataset(
+            config.data.val_manifest, cache, config.data.image_size, num_digits, variant="uniform"
+        )
+        if config.train.tta_variants > 1:
+            tta_datasets = [
+                CroppedCoinDataset(
+                    config.data.val_manifest,
+                    cache,
+                    config.data.image_size,
+                    num_digits,
+                    variant=anchor,
+                )
+                for anchor in CROP_ANCHORS[: config.train.tta_variants]
+            ]
+        print(
+            f"\nimage cache (native): {len(cache)} images in {time.perf_counter() - started:.1f}s "
+            f"({cache.memory_bytes() / 1024**3:.1f} GiB RAM), crop mode",
+            flush=True,
+        )
+    elif config.data.cache:
         cache = ImageCache(config.data.image_size)
         started = time.perf_counter()
         train_dataset = CachedCoinDataset(
@@ -303,9 +371,19 @@ def fit(config: Config, device_spec: str | None = None) -> dict:
     # The reported quality is measured on the best weights, not on the last epoch.
     if best_state is not None:
         model.load_state_dict(best_state)
-    report = evaluate_last_digit(
-        model, val_loader, device, num_classes=config.model.num_classes_per_digit
-    )
+    if tta_datasets:
+        tta_loaders = [
+            DataLoader(dataset, batch_size=config.train.batch_size, num_workers=0, shuffle=False)
+            for dataset in tta_datasets
+        ]
+        report = evaluate_last_digit_tta(
+            model, tta_loaders, device, num_classes=config.model.num_classes_per_digit
+        )
+        print(f"\nTTA over {len(tta_loaders)} crop views")
+    else:
+        report = evaluate_last_digit(
+            model, val_loader, device, num_classes=config.model.num_classes_per_digit
+        )
     print(f"\nbest epoch {best_epoch} (val year accuracy {best_accuracy:.3f})")
     print(format_last_digit_report(report))
 

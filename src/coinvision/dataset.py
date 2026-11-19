@@ -54,6 +54,117 @@ def build_cached_transform(augment: bool = False) -> v2.Compose:
     return v2.Compose(ops)
 
 
+CROP_ANCHORS = ("uniform", "date", "label")
+"""Where a 2:1 window is taken from: anywhere, the engraved date (bottom-right of the reverse) or
+the slab label (top-left). The dataset mixes them so one model covers both photo types."""
+
+ANCHOR_WEIGHTS = (0.5, 0.25, 0.25)
+ANCHOR_EVAL_SCALE = {"uniform": 0.9, "date": 0.35, "label": 0.35}
+
+
+def crop_box(
+    width: int,
+    height: int,
+    aspect: float,
+    scale: float,
+    anchor: str,
+    jitter: float,
+    roll: float,
+    roll2: float,
+) -> tuple[int, int, int, int]:
+    """Window (left, top, width, height) with the requested aspect, kept inside the image."""
+    crop_h = max(8, int(round(height * scale)))
+    crop_w = max(8, int(round(crop_h * aspect)))
+    if crop_w > width:
+        crop_w = width
+        crop_h = max(8, int(round(crop_w / aspect)))
+    if crop_h > height:
+        crop_h = height
+        crop_w = max(8, int(round(crop_h * aspect)))
+
+    if anchor == "date":
+        left = width - crop_w - int(round(jitter * width * roll))
+        top = height - crop_h - int(round(jitter * height * roll2))
+    elif anchor == "label":
+        left = int(round(jitter * width * roll))
+        top = int(round(jitter * height * roll2))
+    else:
+        left = int(round(roll * (width - crop_w)))
+        top = int(round(roll2 * (height - crop_h)))
+    return max(0, left), max(0, top), crop_w, crop_h
+
+
+class CroppedCoinDataset(Dataset):
+    """Feeds 2:1 windows cropped out of the *native* image, resized to the model input size.
+
+    At 448x224 for the whole photo the engraved date is a few pixels tall and the network can only
+    guess; cropping keeps the date at a readable size. ``variant="random"`` mixes the anchors for
+    training, a named anchor gives a reproducible view for evaluation and TTA.
+    """
+
+    def __init__(
+        self,
+        manifest: str | Path,
+        cache: ImageCache,
+        crop_size: tuple[int, int] = (448, 224),
+        num_digits: int = 4,
+        transform: v2.Compose | None = None,
+        variant: str = "random",
+        min_scale: float = 0.30,
+        max_scale: float = 0.90,
+        jitter: float = 0.10,
+        augment: bool = False,
+    ) -> None:
+        if variant != "random" and variant not in CROP_ANCHORS:
+            raise ValueError(f"unknown crop variant {variant!r}")
+        self.manifest = Path(manifest)
+        self.cache = cache
+        self.num_digits = num_digits
+        self.variant = variant
+        self.min_scale = min_scale
+        self.max_scale = max_scale
+        self.jitter = jitter
+        self.out_width, self.out_height = int(crop_size[0]), int(crop_size[1])
+        self.aspect = self.out_width / self.out_height
+        self.transform = (
+            transform if transform is not None else build_cached_transform(augment=augment)
+        )
+        self.samples = [
+            (path, year_to_digits(year, num_digits)) for path, year in read_manifest(self.manifest)
+        ]
+        self.cache.preload(str(path) for path, _ in self.samples)
+
+    def __len__(self) -> int:
+        return len(self.samples)
+
+    def _view(self) -> tuple[str, float, float, float]:
+        if self.variant == "random":
+            anchor = CROP_ANCHORS[
+                int(torch.multinomial(torch.tensor(ANCHOR_WEIGHTS), 1).item())
+            ]
+            scale = float(torch.empty(1).uniform_(self.min_scale, self.max_scale).item())
+            rolls = (float(torch.rand(1).item()), float(torch.rand(1).item()))
+        else:
+            anchor = self.variant
+            scale = ANCHOR_EVAL_SCALE[anchor]
+            rolls = (0.0, 0.0)
+        return anchor, scale, rolls[0], rolls[1]
+
+    def __getitem__(self, index: int) -> tuple[torch.Tensor, torch.Tensor]:
+        path, digits = self.samples[index]
+        image = self.cache.get(path)
+        _, height, width = image.shape
+        anchor, scale, roll, roll2 = self._view()
+        left, top, crop_w, crop_h = crop_box(
+            width, height, self.aspect, scale, anchor, self.jitter, roll, roll2
+        )
+        window = v2.functional.crop(image, top, left, crop_h, crop_w)
+        window = v2.functional.resize(
+            window, [self.out_height, self.out_width], antialias=True
+        )
+        return self.transform(window), torch.tensor(digits, dtype=torch.long)
+
+
 def read_manifest(path: str | Path) -> list[tuple[Path, str]]:
     with Path(path).open(newline="", encoding="utf-8") as fh:
         return [(Path(row["image"]), row["year"]) for row in csv.DictReader(fh)]
