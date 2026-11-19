@@ -10,7 +10,7 @@ def _write(tmp_path: Path, text: str) -> Path:
 
 
 def test_defaults_when_sections_missing(tmp_path: Path):
-    config = load_config(_write(tmp_path, ""))
+    config = load_config(_write(tmp_path, ""), base=None)
 
     assert isinstance(config.data, DataConfig)
     assert config.data.image_size == (448, 224)
@@ -18,6 +18,29 @@ def test_defaults_when_sections_missing(tmp_path: Path):
     assert config.train.epochs == 30
     assert config.infer.device == "auto"
     assert config.project.seed == 42
+
+
+def test_partial_config_inherits_the_base_file(tmp_path: Path):
+    base = tmp_path / "base.toml"
+    base.write_text('[model]\npretrained = true\nbackbone = "resnet18"\n', encoding="utf-8")
+    experiment = tmp_path / "experiment.toml"
+    experiment.write_text("[train]\nepochs = 60\n", encoding="utf-8")
+
+    config = load_config(experiment, base=base)
+
+    assert config.train.epochs == 60
+    # the whole point: an experiment file must not silently drop the base settings
+    assert config.model.pretrained is True
+    assert config.train.lr == 0.001
+
+
+def test_project_experiment_keeps_pretrained(tmp_path: Path):
+    root = Path(__file__).resolve().parents[1]
+    config = load_config(root / "configs" / "exp_epochs60.toml")
+
+    assert config.train.epochs == 60
+    assert config.model.pretrained is True
+    assert config.data.cache is True
 
 
 def test_toml_overrides_and_tuple_coercion(tmp_path: Path):
@@ -38,7 +61,7 @@ batch_size = 4
 """,
     )
 
-    config = load_config(path)
+    config = load_config(path, base=None)
 
     assert config.project.seed == 7
     assert config.data.image_size == (320, 160)
@@ -53,7 +76,7 @@ batch_size = 4
 def test_unknown_keys_and_sections_ignored(tmp_path: Path):
     path = _write(tmp_path, "[train]\nepochs = 5\nlegacy_option = true\n\n[unknown]\nx = 1\n")
 
-    config = load_config(path)
+    config = load_config(path, base=None)
 
     assert config.train.epochs == 5
     assert not hasattr(config, "unknown")
