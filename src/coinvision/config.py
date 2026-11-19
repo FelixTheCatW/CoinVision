@@ -23,6 +23,7 @@ class DataConfig:
     val_fraction: float = 0.2
     image_size: tuple[int, int] = (448, 224)
     num_workers: int = 4
+    augment: bool = False
     extensions: tuple[str, ...] = (".webp", ".jpg", ".jpeg", ".png", ".bmp")
 
 

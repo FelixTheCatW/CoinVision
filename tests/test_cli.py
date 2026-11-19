@@ -29,6 +29,52 @@ def test_cli_config_falls_back_to_defaults(tmp_path, capsys):
     assert "built-in defaults" in capsys.readouterr().err
 
 
+def test_cli_config_flag_accepted_before_and_after_subcommand(tmp_path, capsys):
+    config = tmp_path / "cfg.toml"
+    config.write_text("[project]\nseed = 7\n", encoding="utf-8")
+
+    assert main(["--config", str(config), "config"]) == 0
+    before = capsys.readouterr().out
+    assert "seed = 7" in before
+    assert str(config.resolve()) in before
+
+    assert main(["config", "--config", str(config)]) == 0
+    after = capsys.readouterr().out
+    assert "seed = 7" in after
+    assert str(config.resolve()) in after
+
+
+def test_cli_config_after_subcommand_is_used_by_the_command(tmp_path, capsys):
+    manifest = tmp_path / "all.csv"
+    rows = "\n".join(f"data/source/img-{index}-1832.webp,1832" for index in range(10))
+    manifest.write_text(f"image,year\n{rows}\n", encoding="utf-8")
+
+    config = tmp_path / "cfg.toml"
+    config.write_text("[data]\nval_fraction = 0.5\n", encoding="utf-8")
+
+    train_csv = tmp_path / "train.csv"
+    val_csv = tmp_path / "val.csv"
+    code = main(
+        [
+            "split",
+            str(manifest),
+            "--config",
+            str(config),
+            "--train",
+            str(train_csv),
+            "--val",
+            str(val_csv),
+        ]
+    )
+
+    # val_fraction = 0.5 from the config given after the subcommand; the built-in default
+    # (0.2) would leave 8 train / 2 val rows.
+    assert code == 0
+    assert "val_fraction = 0.5" in capsys.readouterr().out
+    assert len(pd.read_csv(val_csv)) == 5
+    assert len(pd.read_csv(train_csv)) == 5
+
+
 def test_cli_analyze_is_deep_by_default(tmp_path):
     images = tmp_path / "images"
     _make_image(images / "a-1-1832.png")

@@ -126,10 +126,27 @@ def _cmd_train(args: argparse.Namespace, config: Config) -> int:
             return _fail(f"manifest not found: {manifest} (run 'manifest' and 'split' first)")
 
     result = train_module.fit(config, device_spec=args.device)
+    report = result["val_last_digit"]
     print(
-        f"\ndevice {result['device']} | best val year accuracy "
-        f"{result['best_year_accuracy']:.3f} | checkpoints -> {result['out_dir']}"
+        f"\ndevice {result['device']} | best epoch {result['best_epoch']} | "
+        f"last-digit acc {report['accuracy']:.3f} (majority baseline "
+        f"{report['majority_baseline']:.3f}) | macro F1 {report['macro_f1']:.3f} | "
+        f"checkpoints -> {result['out_dir']}"
     )
+    return 0
+
+
+def _cmd_plot(args: argparse.Namespace, config: Config) -> int:
+    from . import plots
+
+    run_dir = Path(args.run_dir)
+    if not (run_dir / plots.METRICS_FILENAME).is_file():
+        return _fail(f"metrics.json not found in {run_dir} (train a model first)")
+
+    paths = plots.render_run(run_dir)
+    print(f"run -> {run_dir}")
+    for name, path in paths.items():
+        print(f"  {name} -> {path}")
     return 0
 
 
@@ -159,17 +176,26 @@ def _cmd_predict(args: argparse.Namespace, config: Config) -> int:
     return 0
 
 
+def _add_config_option(parser: argparse.ArgumentParser, *, suppress_default: bool = False) -> None:
+    """Register --config.
+
+    The flag is accepted both before and after the subcommand: subparsers register it with a
+    SUPPRESS default so an earlier value is not overwritten by argparse's own default.
+    """
+    parser.add_argument(
+        "--config",
+        default=argparse.SUPPRESS if suppress_default else str(DEFAULT_CONFIG_PATH),
+        help=f"TOML config path (default: {DEFAULT_CONFIG_PATH})",
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="coinvision",
         description="Coin year recognition: dataset tooling and training.",
     )
     parser.add_argument("--version", action="version", version=f"coinvision {__version__}")
-    parser.add_argument(
-        "--config",
-        default=str(DEFAULT_CONFIG_PATH),
-        help=f"TOML config path (default: {DEFAULT_CONFIG_PATH})",
-    )
+    _add_config_option(parser)
     subparsers = parser.add_subparsers(dest="command", required=True, metavar="command")
 
     analyze_parser = subparsers.add_parser("analyze", help="scan a dataset into a CSV plus summary")
@@ -230,6 +256,16 @@ def build_parser() -> argparse.ArgumentParser:
     predict_parser.add_argument("--checkpoint", default=None)
     predict_parser.add_argument("--device", default=None, help="auto / cuda / cpu")
     predict_parser.set_defaults(func=_cmd_predict)
+
+    plot_parser = subparsers.add_parser(
+        "plot", help="re-render the history/confusion plots of a run from metrics.json"
+    )
+    plot_parser.add_argument("run_dir", help="run directory that holds metrics.json")
+    plot_parser.set_defaults(func=_cmd_plot)
+
+    # `coinvision train --config x.toml` should work just like `coinvision --config x.toml train`.
+    for subparser in subparsers.choices.values():
+        _add_config_option(subparser, suppress_default=True)
 
     return parser
 

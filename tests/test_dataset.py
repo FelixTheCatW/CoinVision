@@ -44,3 +44,26 @@ def test_transform_output_shape_and_dtype():
 
     assert tensor.shape == (3, 24, 48)
     assert tensor.dtype == torch.float32
+
+
+def test_augmented_transform_keeps_shape_and_normalises():
+    transform = build_transform((48, 24), augment=True)
+
+    tensor = transform(Image.new("RGB", (100, 60), (200, 100, 50)))
+
+    assert tensor.shape == (3, 24, 48)
+    assert tensor.dtype == torch.float32
+    assert tensor.min() < 0 < tensor.max()
+
+
+def test_dataset_accepts_augment_flag(tmp_path: Path):
+    image_path = tmp_path / "a.png"
+    Image.new("RGB", (200, 100), (1, 2, 3)).save(image_path)
+    manifest = tmp_path / "manifest.csv"
+    manifest.write_text(f"image,year\n{image_path.as_posix()},1832\n", encoding="utf-8")
+
+    dataset = CoinDataset(manifest, image_size=(64, 32), augment=True)
+    tensor, target = dataset[0]
+
+    assert tensor.shape == (3, 32, 64)
+    assert target.tolist() == [1, 8, 3, 2]

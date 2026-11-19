@@ -25,13 +25,33 @@ def digits_to_year(digits: Sequence[int]) -> str:
     return "".join(str(int(digit)) for digit in digits)
 
 
-def build_transform(image_size: tuple[int, int]) -> v2.Compose:
-    """image_size is (width, height) as in the config; torchvision wants (height, width)."""
+def build_transform(image_size: tuple[int, int], augment: bool = False) -> v2.Compose:
+    """image_size is (width, height) as in the config; torchvision wants (height, width).
+
+    ``augment=True`` adds geometric and photometric jitter for training only. No horizontal
+    flip: mirroring would turn the numismatics date into pseudo-text the digit heads never see
+    at inference time.
+    """
     width, height = image_size
+    resize = v2.Resize((int(height), int(width)), antialias=True)
+    if augment:
+        return v2.Compose(
+            [
+                v2.ToImage(),
+                resize,
+                v2.RandomAffine(
+                    degrees=(-10.0, 10.0), translate=(0.04, 0.06), scale=(0.9, 1.1), shear=3.0
+                ),
+                v2.ColorJitter(brightness=0.25, contrast=0.25, saturation=0.1, hue=0.03),
+                v2.RandomApply([v2.GaussianBlur(kernel_size=3)], p=0.25),
+                v2.ToDtype(torch.float32, scale=True),
+                v2.Normalize(IMAGENET_MEAN, IMAGENET_STD),
+            ]
+        )
     return v2.Compose(
         [
             v2.ToImage(),
-            v2.Resize((int(height), int(width)), antialias=True),
+            resize,
             v2.ToDtype(torch.float32, scale=True),
             v2.Normalize(IMAGENET_MEAN, IMAGENET_STD),
         ]
@@ -52,10 +72,15 @@ class CoinDataset(Dataset):
         image_size: tuple[int, int] = (448, 224),
         num_digits: int = 4,
         transform: v2.Compose | None = None,
+        augment: bool = False,
     ) -> None:
         self.manifest = Path(manifest)
         self.num_digits = num_digits
-        self.transform = transform if transform is not None else build_transform(image_size)
+        self.transform = (
+            transform
+            if transform is not None
+            else build_transform(image_size, augment=augment)
+        )
         self.samples = [
             (path, year_to_digits(year, num_digits)) for path, year in read_manifest(self.manifest)
         ]

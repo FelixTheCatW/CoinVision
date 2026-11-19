@@ -10,10 +10,13 @@ val_manifest = "data/manifests/val.csv"
 val_fraction = 0.2
 image_size = [448, 224]
 num_workers = 4
+augment = false
 
 [model]
 backbone = "resnet18"
-pretrained = false
+# From scratch resnet18 tops out at ~0.52 last-digit accuracy on this dataset; ImageNet init
+# reaches ~0.84 in the same 30 epochs (runs/pre/metrics.json vs runs/ref/metrics.json).
+pretrained = true
 num_digits = 4
 num_classes_per_digit = 10
 dropout = 0.2
@@ -28,5 +31,5 @@ num_workers = 4
 out_dir = "runs"
 
 [infer]
-checkpoint = "runs/best.pt"
+checkpoint = "runs/pre/best.pt"
 device = "auto"

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -99,18 +101,103 @@ def evaluate(
     return _collect(model, loader, device, criterion, None, max_batches)
 
 
+def last_digit_report(
+    targets: Sequence[int], predictions: Sequence[int], num_classes: int = 10
+) -> dict:
+    """Micro accuracy, macro F1 and a confusion matrix for the last digit of the year."""
+    if len(targets) != len(predictions):
+        raise ValueError("targets and predictions must have the same length")
+    if not targets:
+        raise ValueError("no samples to report")
+
+    matrix = [[0] * num_classes for _ in range(num_classes)]
+    for true_label, predicted in zip(targets, predictions, strict=True):
+        matrix[int(true_label)][int(predicted)] += 1
+
+    total = len(targets)
+    support = [sum(row) for row in matrix]
+    predicted_counts = [
+        sum(matrix[row][column] for row in range(num_classes)) for column in range(num_classes)
+    ]
+
+    per_class: dict[str, dict[str, float | int]] = {}
+    f1_scores: list[float] = []
+    for label in range(num_classes):
+        if support[label] == 0:
+            continue
+        true_positive = matrix[label][label]
+        precision = true_positive / predicted_counts[label] if predicted_counts[label] else 0.0
+        recall = true_positive / support[label]
+        denominator = precision + recall
+        f1 = 2 * precision * recall / denominator if denominator else 0.0
+        per_class[str(label)] = {
+            "precision": precision,
+            "recall": recall,
+            "f1": f1,
+            "support": support[label],
+            "predicted": predicted_counts[label],
+        }
+        f1_scores.append(f1)
+
+    hits = sum(matrix[label][label] for label in range(num_classes))
+    return {
+        "num_samples": total,
+        "accuracy": hits / total,
+        "macro_f1": sum(f1_scores) / len(f1_scores),
+        "majority_baseline": max(support) / total,
+        "labels": [int(label) for label in per_class],
+        "per_class": per_class,
+        "confusion": matrix,
+    }
+
+
+def evaluate_last_digit(
+    model: nn.Module,
+    loader: DataLoader,
+    device: torch.device,
+    num_classes: int = 10,
+    max_batches: int | None = None,
+) -> dict:
+    """Run the model over a loader and report the last-digit classification quality."""
+    model.eval()
+    targets: list[int] = []
+    predictions: list[int] = []
+    with torch.no_grad():
+        for batch_index, (images, batch_targets) in enumerate(loader):
+            if max_batches is not None and batch_index >= max_batches:
+                break
+            logits = model(images.to(device))
+            predictions.extend(logits.argmax(dim=-1)[:, -1].tolist())
+            targets.extend(batch_targets[:, -1].tolist())
+    return last_digit_report(targets, predictions, num_classes)
+
+
+def format_last_digit_report(report: dict) -> str:
+    labels = report["labels"]
+    lines = [
+        f"val last digit: acc={report['accuracy']:.3f} macro_f1={report['macro_f1']:.3f} "
+        f"(majority baseline {report['majority_baseline']:.3f}, n={report['num_samples']})",
+        "  true\\pred " + "".join(f"{label:>6}" for label in labels),
+    ]
+    for label in labels:
+        row = report["confusion"][label]
+        lines.append(f"{label:>11} " + "".join(f"{row[column]:>6}" for column in labels))
+    return "\n".join(lines)
+
+
 def fit(config: Config, device_spec: str | None = None) -> dict:
     """Train the digit-head model and write best.pt/last.pt into config.train.out_dir."""
     set_seed(config.project.seed)
     device = resolve_device(device_spec or config.infer.device)
-    transform = build_transform(config.data.image_size)
+    train_transform = build_transform(config.data.image_size, augment=config.data.augment)
+    val_transform = build_transform(config.data.image_size)
     num_digits = config.model.num_digits
 
     train_dataset = CoinDataset(
-        config.data.train_manifest, config.data.image_size, num_digits, transform
+        config.data.train_manifest, config.data.image_size, num_digits, train_transform
     )
     val_dataset = CoinDataset(
-        config.data.val_manifest, config.data.image_size, num_digits, transform
+        config.data.val_manifest, config.data.image_size, num_digits, val_transform
     )
 
     loader_kwargs = {
@@ -118,6 +205,11 @@ def fit(config: Config, device_spec: str | None = None) -> dict:
         "num_workers": config.train.num_workers,
         "pin_memory": device.type == "cuda",
     }
+    if config.train.num_workers > 0:
+        # On Windows every worker costs several seconds of spawning, so keep them alive
+        # across epochs instead of paying that per epoch (measured: 10 -> 56 img/s).
+        loader_kwargs["persistent_workers"] = True
+        loader_kwargs["prefetch_factor"] = 4
     train_loader = DataLoader(train_dataset, shuffle=True, **loader_kwargs)
     val_loader = DataLoader(val_dataset, shuffle=False, **loader_kwargs)
 
@@ -136,6 +228,8 @@ def fit(config: Config, device_spec: str | None = None) -> dict:
 
     history: list[dict] = []
     best_accuracy = -1.0
+    best_epoch = 0
+    best_state: dict[str, torch.Tensor] | None = None
     for epoch in range(1, config.train.epochs + 1):
         train_metrics = train_epoch(model, train_loader, optimizer, device, multihead_loss)
         val_metrics = evaluate(model, val_loader, device, multihead_loss)
@@ -159,12 +253,54 @@ def fit(config: Config, device_spec: str | None = None) -> dict:
         }
         if val_metrics.year_accuracy > best_accuracy:
             best_accuracy = val_metrics.year_accuracy
+            best_epoch = epoch
+            best_state = {
+                name: parameter.detach().cpu().clone()
+                for name, parameter in model.state_dict().items()
+            }
             torch.save(checkpoint, out_dir / "best.pt")
         torch.save(checkpoint, out_dir / "last.pt")
+
+    # The reported quality is measured on the best weights, not on the last epoch.
+    if best_state is not None:
+        model.load_state_dict(best_state)
+    report = evaluate_last_digit(
+        model, val_loader, device, num_classes=config.model.num_classes_per_digit
+    )
+    print(f"\nbest epoch {best_epoch} (val year accuracy {best_accuracy:.3f})")
+    print(format_last_digit_report(report))
+
+    metrics = {
+        "device": str(device),
+        "best_epoch": best_epoch,
+        "best_year_accuracy": best_accuracy,
+        "epochs_run": len(history),
+        "history": history,
+        "val_last_digit": report,
+        "config": {
+            "project": asdict(config.project),
+            "data": asdict(config.data),
+            "model": asdict(config.model),
+            "train": asdict(config.train),
+        },
+    }
+    metrics_path = out_dir / "metrics.json"
+    metrics_path.write_text(json.dumps(metrics, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"metrics -> {metrics_path}")
+
+    from . import plots
+
+    plot_paths = plots.plot_metrics(metrics, out_dir)
+    for name, path in plot_paths.items():
+        print(f"{name} plot -> {path}")
 
     return {
         "device": str(device),
         "out_dir": str(out_dir),
         "best_year_accuracy": best_accuracy,
+        "best_epoch": best_epoch,
+        "val_last_digit": report,
+        "metrics_path": str(metrics_path),
+        "plots": {name: str(path) for name, path in plot_paths.items()},
         "history": history,
     }

@@ -65,6 +65,8 @@ def test_project_config_file(tmp_path: Path):
 
     assert isinstance(config, Config)
     assert config.model.backbone == "resnet18"
-    assert config.model.pretrained is False
+    # ImageNet init beats from-scratch training on this dataset by a wide margin.
+    assert config.model.pretrained is True
+    assert config.data.augment is False
     assert config.model.num_classes_per_digit == 10
     assert config.train.out_dir == "runs"

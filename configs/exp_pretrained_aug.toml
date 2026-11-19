@@ -1,0 +1,7 @@
+# Experiment C: ImageNet-initialised backbone + training-time augmentation.
+
+[data]
+augment = true
+
+[model]
+pretrained = true
