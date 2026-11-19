@@ -156,6 +156,8 @@ def _cmd_train(args: argparse.Namespace, config: Config) -> int:
         config.data.cache = False
     if args.deterministic:
         config.train.deterministic = True
+    if args.seed is not None:
+        config.project.seed = args.seed
 
     for manifest in (config.data.train_manifest, config.data.val_manifest):
         if not Path(manifest).is_file():
@@ -169,6 +171,36 @@ def _cmd_train(args: argparse.Namespace, config: Config) -> int:
         f"{report['majority_baseline']:.3f}) | macro F1 {report['macro_f1']:.3f} | "
         f"checkpoints -> {result['out_dir']}"
     )
+    return 0
+
+
+def _cmd_ensemble(args: argparse.Namespace, config: Config) -> int:
+    from . import ensemble
+    from .train import format_last_digit_report
+
+    manifest = Path(args.manifest)
+    if not manifest.is_file():
+        return _fail(f"manifest not found: {manifest}")
+    for checkpoint in args.checkpoint:
+        if not Path(checkpoint).is_file():
+            return _fail(f"checkpoint not found: {checkpoint}")
+
+    image_size = (int(config.data.image_size[0]), int(config.data.image_size[1]))
+    report = ensemble.evaluate_ensemble(
+        args.checkpoint,
+        manifest,
+        image_size,
+        views=args.tta,
+        device_spec=args.device or config.infer.device,
+        num_classes=config.model.num_classes_per_digit,
+    )
+    print(format_last_digit_report(report))
+    print(f"\ncheckpoints: {len(args.checkpoint)}, views: {args.tta}")
+    if args.json:
+        out = Path(args.json)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+        print(f"JSON -> {out}")
     return 0
 
 
@@ -317,6 +349,9 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="bit-reproducible CUDA kernels (slower, but two runs give the same numbers)",
     )
+    train_parser.add_argument(
+        "--seed", type=int, default=None, help="override project.seed (multi-seed ensembles)"
+    )
     train_parser.set_defaults(func=_cmd_train)
 
     predict_parser = subparsers.add_parser("predict", help="predict the year of one coin image")
@@ -330,6 +365,21 @@ def build_parser() -> argparse.ArgumentParser:
     )
     plot_parser.add_argument("run_dir", help="run directory that holds metrics.json")
     plot_parser.set_defaults(func=_cmd_plot)
+
+    ensemble_parser = subparsers.add_parser(
+        "ensemble", help="evaluate the average of several checkpoints over one or more views"
+    )
+    ensemble_parser.add_argument("--manifest", required=True)
+    ensemble_parser.add_argument(
+        "--checkpoint",
+        action="append",
+        required=True,
+        help="checkpoint path, repeatable",
+    )
+    ensemble_parser.add_argument("--tta", type=int, default=1, help="number of views (1-3)")
+    ensemble_parser.add_argument("--device", default=None, help="auto / cuda / cpu")
+    ensemble_parser.add_argument("--json", default=None)
+    ensemble_parser.set_defaults(func=_cmd_ensemble)
 
     # `coinvision train --config x.toml` should work just like `coinvision --config x.toml train`.
     for subparser in subparsers.choices.values():
