@@ -1,6 +1,6 @@
 # Screen variant 1: training-time augmentation, with the 60-epoch budget it needs to pay off.
-# The 30-epoch run with augmentation was neutral-to-worse; at 30 epochs the jitter only slows
-# convergence, and the baseline is clearly overfitting (train 0.998 vs val 0.85).
+# Measured on fold0: 0.8898 (macro F1 0.8609) versus 0.8616 (0.7999) for the 30-epoch baseline.
+# At 30 epochs the same augmentation was neutral-to-worse; the budget is what unlocks it.
 
 [data]
 augment = true
