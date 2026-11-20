@@ -25,6 +25,10 @@ dev = [
     "ruff>=0.6",
     "mypy>=1.11",
 ]
+export = [
+    "onnx>=1.23.2",
+    "onnxruntime>=1.32.0",
+]
 
 [project.scripts]
 coinvision = "coinvision.cli:main"

@@ -174,6 +174,30 @@ def _cmd_train(args: argparse.Namespace, config: Config) -> int:
     return 0
 
 
+def _cmd_export(args: argparse.Namespace, config: Config) -> int:
+    from . import export
+
+    for checkpoint in args.checkpoint:
+        if not Path(checkpoint).is_file():
+            return _fail(f"checkpoint not found: {checkpoint}")
+
+    image_size = (int(config.data.image_size[0]), int(config.data.image_size[1]))
+    metadata = export.export_onnx(
+        args.checkpoint,
+        args.out_dir,
+        image_size=image_size,
+        opset=args.opset,
+        verify=not args.no_verify,
+    )
+    print(f"exported {len(metadata['models'])} model(s) to {args.out_dir}")
+    for entry in metadata["models"]:
+        diff = entry.get("max_abs_diff")
+        suffix = f", max|torch-onnx| = {diff}" if diff is not None else ""
+        print(f"  {entry['file']} ({int(entry['size_bytes']) / 1024**2:.1f} MiB){suffix}")
+    print(f"metadata -> {Path(args.out_dir) / export.METADATA_FILENAME}")
+    return 0
+
+
 def _cmd_ensemble(args: argparse.Namespace, config: Config) -> int:
     from . import ensemble
     from .train import format_last_digit_report
@@ -380,6 +404,19 @@ def build_parser() -> argparse.ArgumentParser:
     ensemble_parser.add_argument("--device", default=None, help="auto / cuda / cpu")
     ensemble_parser.add_argument("--json", default=None)
     ensemble_parser.set_defaults(func=_cmd_ensemble)
+
+    export_parser = subparsers.add_parser(
+        "export", help="export checkpoints to ONNX with a preprocessing metadata sidecar"
+    )
+    export_parser.add_argument(
+        "--checkpoint", action="append", required=True, help="checkpoint path, repeatable"
+    )
+    export_parser.add_argument("--out-dir", default="onnx", help="output directory")
+    export_parser.add_argument("--opset", type=int, default=17)
+    export_parser.add_argument(
+        "--no-verify", action="store_true", help="skip the onnxruntime comparison"
+    )
+    export_parser.set_defaults(func=_cmd_export)
 
     # `coinvision train --config x.toml` should work just like `coinvision --config x.toml train`.
     for subparser in subparsers.choices.values():

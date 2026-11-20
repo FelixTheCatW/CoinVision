@@ -227,3 +227,14 @@ data/
 # Training artifacts: checkpoints are large and reproducible from configs
 runs/
 *.pt
+# .NET build output
+api/**/bin/
+api/**/obj/
+api/CoinVision.Api/wwwroot/
+
+# Node
+frontend/node_modules/
+frontend/dist/
+
+# exported models (re-created by `coinvision export`)
+onnx/
