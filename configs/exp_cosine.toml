@@ -1,0 +1,5 @@
+# Screen variant 3: warmup + cosine decay instead of the flat 1e-3 the baseline keeps all run.
+
+[train]
+lr_schedule = "cosine"
+warmup_epochs = 2

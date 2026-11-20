@@ -1,0 +1,9 @@
+# Screen variant 1: training-time augmentation, with the 60-epoch budget it needs to pay off.
+# The 30-epoch run with augmentation was neutral-to-worse; at 30 epochs the jitter only slows
+# convergence, and the baseline is clearly overfitting (train 0.998 vs val 0.85).
+
+[data]
+augment = true
+
+[train]
+epochs = 60
