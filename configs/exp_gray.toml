@@ -1,0 +1,5 @@
+# Screen: is the date easier to read without the colour channels?
+# Channels stay at three (grey repeated) so the ImageNet-pretrained stem is untouched; normalisation
+# uses the luma-weighted equivalents of the ImageNet statistics. Everything else is default.toml.
+[data]
+color_mode = "gray"

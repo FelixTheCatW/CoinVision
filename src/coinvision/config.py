@@ -25,6 +25,7 @@ class DataConfig:
     num_workers: int = 4
     augment: bool = False
     cache: bool = True
+    color_mode: str = "rgb"
     extensions: tuple[str, ...] = (".webp", ".jpg", ".jpeg", ".png", ".bmp")
 
 

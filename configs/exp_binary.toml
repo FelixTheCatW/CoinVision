@@ -1,0 +1,5 @@
+# Screen: per-image Otsu threshold instead of grey levels.
+# This destroys the relief shading the digits are read from, so it is the pessimistic variant: it is
+# run to get a number, not because it is expected to win.
+[data]
+color_mode = "binary"

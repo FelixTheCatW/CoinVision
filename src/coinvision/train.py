@@ -235,17 +235,25 @@ def fit(config: Config, device_spec: str | None = None) -> dict:
         cache = ImageCache(config.data.image_size)
         started = time.perf_counter()
         train_dataset = CachedCoinDataset(
-            config.data.train_manifest, cache, num_digits, augment=config.data.augment
+            config.data.train_manifest,
+            cache,
+            num_digits,
+            augment=config.data.augment,
+            color_mode=config.data.color_mode,
         )
-        val_dataset = CachedCoinDataset(config.data.val_manifest, cache, num_digits)
+        val_dataset = CachedCoinDataset(
+            config.data.val_manifest, cache, num_digits, color_mode=config.data.color_mode
+        )
         print(
             f"\nimage cache: {len(cache)} images in {time.perf_counter() - started:.1f}s "
             f"({cache.memory_bytes() / 1024**2:.0f} MiB RAM)",
             flush=True,
         )
     else:
-        train_transform = build_transform(config.data.image_size, augment=config.data.augment)
-        val_transform = build_transform(config.data.image_size)
+        train_transform = build_transform(
+            config.data.image_size, augment=config.data.augment, color_mode=config.data.color_mode
+        )
+        val_transform = build_transform(config.data.image_size, color_mode=config.data.color_mode)
         train_dataset = CoinDataset(
             config.data.train_manifest, config.data.image_size, num_digits, train_transform
         )
