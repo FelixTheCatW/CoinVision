@@ -10,7 +10,9 @@ val_manifest = "data/manifests/val.csv"
 val_fraction = 0.2
 image_size = [448, 224]
 num_workers = 4
-augment = false
+# The recipe below is the measured winner of the 5-fold comparison (configs/exp_combo.toml):
+# 0.8758 +- 0.0199 last-digit accuracy against 0.8519 +- 0.0178 for the plain 30-epoch run.
+augment = true
 cache = true
 
 [model]
@@ -23,13 +25,18 @@ num_classes_per_digit = 10
 dropout = 0.2
 
 [train]
-epochs = 30
+# 60 epochs belong to the winning recipe: its best epoch lands at 39-57, so the old 30-epoch
+# budget was cutting training short.
+epochs = 60
 batch_size = 32
 lr = 0.001
 weight_decay = 0.0001
 amp = false
 num_workers = 4
 deterministic = false
+label_smoothing = 0.1
+lr_schedule = "cosine"
+warmup_epochs = 3
 out_dir = "runs"
 
 [infer]
