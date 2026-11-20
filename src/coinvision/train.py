@@ -5,6 +5,7 @@ import random
 import time
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass
+from functools import partial
 from pathlib import Path
 
 import torch
@@ -31,10 +32,14 @@ class EpochMetrics:
         return f"{prefix} loss={self.loss:.4f} year={self.year_accuracy:.3f} {digits}"
 
 
-def multihead_loss(logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+def multihead_loss(
+    logits: torch.Tensor, targets: torch.Tensor, label_smoothing: float = 0.0
+) -> torch.Tensor:
     """Mean cross-entropy over the digit heads. logits: [B, D, C], targets: [B, D]."""
     losses = [
-        nn.functional.cross_entropy(logits[:, index], targets[:, index])
+        nn.functional.cross_entropy(
+            logits[:, index], targets[:, index], label_smoothing=label_smoothing
+        )
         for index in range(logits.shape[1])
     ]
     return torch.stack(losses).mean()
@@ -188,6 +193,26 @@ def format_last_digit_report(report: dict) -> str:
     return "\n".join(lines)
 
 
+def _build_scheduler(
+    optimizer: torch.optim.Optimizer, train
+) -> torch.optim.lr_scheduler.LRScheduler | None:
+    """Optional warmup + cosine decay over the epochs (the default keeps a flat learning rate)."""
+    if train.lr_schedule == "none":
+        return None
+    if train.lr_schedule != "cosine":
+        raise ValueError(f"unsupported lr_schedule {train.lr_schedule!r}: use 'none' or 'cosine'")
+
+    epochs = max(1, int(train.epochs))
+    warmup = min(max(0, int(train.warmup_epochs)), max(0, epochs - 1))
+    cosine = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=max(1, epochs - warmup))
+    if warmup == 0:
+        return cosine
+    linear = torch.optim.lr_scheduler.LinearLR(optimizer, start_factor=0.1, total_iters=warmup)
+    return torch.optim.lr_scheduler.SequentialLR(
+        optimizer, schedulers=[linear, cosine], milestones=[warmup]
+    )
+
+
 def _seed_worker(worker_id: int) -> None:
     """Seed a loader worker from its torch seed so augmentation does not depend on spawn order."""
     import numpy as np
@@ -255,6 +280,11 @@ def fit(config: Config, device_spec: str | None = None) -> dict:
         model.parameters(), lr=config.train.lr, weight_decay=config.train.weight_decay
     )
 
+    criterion = multihead_loss
+    if config.train.label_smoothing > 0:
+        criterion = partial(multihead_loss, label_smoothing=config.train.label_smoothing)
+    scheduler = _build_scheduler(optimizer, config.train)
+
     out_dir = Path(config.train.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     meta = {
@@ -269,11 +299,15 @@ def fit(config: Config, device_spec: str | None = None) -> dict:
     best_state: dict[str, torch.Tensor] | None = None
     for epoch in range(1, config.train.epochs + 1):
         epoch_started = time.perf_counter()
-        train_metrics = train_epoch(model, train_loader, optimizer, device, multihead_loss)
+        train_metrics = train_epoch(model, train_loader, optimizer, device, criterion)
+        # validation loss stays unweighted/un-smoothed so every variant is comparable
         val_metrics = evaluate(model, val_loader, device, multihead_loss)
         epoch_seconds = time.perf_counter() - epoch_started
+        learning_rate = optimizer.param_groups[0]["lr"]
+        if scheduler is not None:
+            scheduler.step()
         print(
-            f"epoch {epoch}/{config.train.epochs} ({epoch_seconds:.1f}s) | "
+            f"epoch {epoch}/{config.train.epochs} ({epoch_seconds:.1f}s, lr={learning_rate:.2e}) | "
             f"{train_metrics.format('train')} | {val_metrics.format('val')}",
             flush=True,
         )

@@ -1,0 +1,5 @@
+# Screen variant 2: label smoothing, aimed at the confidently wrong predictions the audit found
+# (p_true ~ 0.000 on the worst errors).
+
+[train]
+label_smoothing = 0.1

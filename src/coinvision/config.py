@@ -46,6 +46,9 @@ class TrainConfig:
     amp: bool = False
     num_workers: int = 4
     deterministic: bool = False
+    label_smoothing: float = 0.0
+    lr_schedule: str = "none"
+    warmup_epochs: int = 1
     out_dir: str = "runs"
 
 
