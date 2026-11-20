@@ -253,12 +253,13 @@ def fit(config: Config, device_spec: str | None = None) -> dict:
             config.data.val_manifest, config.data.image_size, num_digits, val_transform
         )
 
-    # With the pixel cache the per-sample work is a lookup plus a normalise (~1 ms), and spawning
-    # workers would hand every one of them its own copy of the 500 MiB cache, so the loader runs
-    # in-process instead.
+    # The pixel cache makes a sample a lookup plus a normalise, so the loader runs in-process -
+    # unless augmentation is on, where the CPU-bound jitter is worth spreading over workers (each
+    # worker then holds its own copy of the cache).
+    workers = config.train.num_workers if config.data.augment else 0
     loader_kwargs = {
         "batch_size": config.train.batch_size,
-        "num_workers": 0 if config.data.cache else config.train.num_workers,
+        "num_workers": workers if config.data.cache else config.train.num_workers,
         "pin_memory": device.type == "cuda",
     }
     if loader_kwargs["num_workers"] > 0:
