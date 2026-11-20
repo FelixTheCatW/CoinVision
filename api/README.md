@@ -21,7 +21,8 @@ models; this folder serves them over HTTP and ships a small Vue 3 page for manua
 ## Export the models
 
 ```bash
-uv sync --extra export
+# `--extra dev` as well: a bare `uv sync --extra export` drops pytest/ruff from the environment
+uv sync --extra dev --extra export
 uv run coinvision export \
   --checkpoint runs/cv5_combo/fold0/best.pt \
   --checkpoint runs/cv5_combo/fold1/best.pt \
