@@ -1,5 +1,7 @@
 # Screen variant 4: everything that fights overfitting at once - augmentation, label smoothing and
 # a warmup + cosine schedule over 60 epochs.
+# Measured on fold0: 0.9068 (macro F1 0.8721) against 0.8616 (0.7999) for the baseline, i.e. +4.5 pp
+# accuracy and +7.2 pp macro F1 in a single fold. Worth a full cross-validation run.
 
 [data]
 augment = true
