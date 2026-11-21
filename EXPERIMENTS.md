@@ -85,10 +85,15 @@ What works, measured:
 
 What does not work yet:
 
-- **Choosing the window by the classifier's own confidence.** 124-248 candidates per photo, ranked by
-  the product of the digit probabilities: 1/12 images get the right year, while the same model on the
-  same images scores 16/16 on the full frame. The confidence is high on windows holding shield
-  detail or legend letters, so it is an anti-selector, not a selector.
+- **Choosing the window by the classifier's own confidence.** Two runs, both ranked by the product of
+  the digit probabilities:
+  - glyph runs only (five candidates per coin, 16 photos): 2/16 correct, while the same model on the
+    same 16 photos scores 16/16 on the full frame, and some candidate was right in 6/16;
+  - the full ring sweep (124 candidates per photo, 12 photos): 1/12 correct. The fraction of runs
+    where some candidate is right is not usable evidence here - with 124 guesses per photo, a model
+    biased towards the common classes hits the right one by chance.
+  In both cases the confidence peaks on windows holding shield detail or legend letters, so it is an
+  anti-selector, not a selector.
 - **Glyph grouping.** After unwrapping, dark blobs are grouped into runs of four glyphs of similar
   height at one radius. On a real photo the filter keeps 131 glyphs per coin (legend letters plus the
   beaded border, which starts around 0.95R) and the top-scoring run lands on "REX" of the legend -
