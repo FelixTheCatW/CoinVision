@@ -69,6 +69,35 @@ Per digit, pooled over the folds (30-epoch baseline -> recipe):
 Everything improved except 1830, which label smoothing and augmentation squeeze further; bagging two
 seeds brings it back to 0.577 recall (F1 0.698) and is the only thing that measurably helps it.
 
+## Finding the date before classifying it
+
+`src/coinvision/localize.py` is the label-free pre-step: coin circle, ring unwrap, upright crops. It
+exists because the classifier cannot rescue a frame in which the year is a few pixels high, and it
+answers confidently on frames it has never seen (a blank white canvas scores 0.66 on 1836).
+
+What works, measured:
+
+| step | evidence |
+|---|---|
+| circle detection (gradient voting + rim profile) | synthetic disc: radius within 12%, centre within 25 px; a two-coin frame: both circles found, radius within 15% |
+| ring unwrap and upright crop | a candidate at -90 deg turns vertical stripes horizontal and the reverse; crops are resampled with an explicit affine, so the orientation is testable |
+| coverage | 31 windows per band, two bands, 46 deg wide at an 11.5 deg step: any run of four digits spans far less than 46 deg, so it lies inside at least one window by construction |
+
+What does not work yet:
+
+- **Choosing the window by the classifier's own confidence.** 124-248 candidates per photo, ranked by
+  the product of the digit probabilities: 1/12 images get the right year, while the same model on the
+  same images scores 16/16 on the full frame. The confidence is high on windows holding shield
+  detail or legend letters, so it is an anti-selector, not a selector.
+- **Glyph grouping.** After unwrapping, dark blobs are grouped into runs of four glyphs of similar
+  height at one radius. On a real photo the filter keeps 131 glyphs per coin (legend letters plus the
+  beaded border, which starts around 0.95R) and the top-scoring run lands on "REX" of the legend -
+  confirmed by eye on the six best crops of one photo: none contained the year.
+
+Consequence: the localiser can generate candidates and upright crops, but deciding which one is the
+year needs supervision - either boxes for a detector, or a classifier trained on crop labels. Until
+one of those exists, the whole-frame model stays the thing that answers.
+
 ## What did not work, and why
 
 - **Class weights** cost 5.9 pp. With 21-26 images in the rare class the weights redistribute

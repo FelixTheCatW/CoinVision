@@ -244,6 +244,79 @@ def _cmd_predict(args: argparse.Namespace, config: Config) -> int:
     return 0
 
 
+def _cmd_localize(args: argparse.Namespace, config: Config) -> int:
+    """Find the engraved year and write review sheets; no model involved."""
+    from PIL import Image as PILImage
+
+    from .localize import annotate, candidates, crop_upright
+
+    out_dir = Path(args.out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    if args.image:
+        paths = [Path(args.image)]
+    elif args.manifest:
+        from .data import read_manifest
+
+        paths = [Path(row["image"]) for row in read_manifest(args.manifest)]
+        if args.limit:
+            paths = paths[: args.limit]
+    else:
+        return _fail("pass --image or --manifest")
+
+    size = (args.width, args.height)
+    records = []
+    with_candidate = 0
+    for path in paths:
+        if not path.is_file():
+            print(f"skip {path}: not a file", file=sys.stderr)
+            continue
+        with PILImage.open(path) as handle:
+            image = handle.convert("RGB")
+
+        found = candidates(image, max_coins=args.max_coins, top_k=args.top_k)
+        if not found:
+            print(f"{path.name[:44]:46} no candidate")
+            records.append({"image": str(path), "candidates": 0, "boxes": []})
+            continue
+
+        with_candidate += 1
+        crops = [crop_upright(image, candidate, size=size) for candidate in found[: args.top_k]]
+        annotate(image, found[0], crops[0]).save(out_dir / f"{path.stem[:32]}_sheet.png")
+
+        contact = PILImage.new("RGB", (size[0], size[1] * len(crops)), (20, 20, 24))
+        for index, crop in enumerate(crops):
+            contact.paste(crop, (0, index * size[1]))
+        contact.save(out_dir / f"{path.stem[:32]}_candidates.png")
+
+        records.append(
+            {
+                "image": str(path),
+                "candidates": len(found),
+                "boxes": [
+                    {
+                        "box": list(candidate.box),
+                        "angle_deg": round(candidate.angle_deg, 2),
+                        "score": round(candidate.score, 4),
+                        "digits": candidate.digits,
+                    }
+                    for candidate in found[: args.top_k]
+                ],
+            }
+        )
+        best = found[0]
+        print(
+            f"{path.name[:44]:46} candidates={len(found):3} best score={best.score:.2f} "
+            f"digits={best.digits} angle={best.angle_deg:7.1f}"
+        )
+
+    (out_dir / "candidates.json").write_text(
+        json.dumps(records, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
+    print(f"\n{with_candidate}/{len(paths)} images produced candidates -> {out_dir}")
+    return 0
+
+
 def _add_config_option(parser: argparse.ArgumentParser, *, suppress_default: bool = False) -> None:
     """Register --config.
 
@@ -365,6 +438,21 @@ def build_parser() -> argparse.ArgumentParser:
     )
     plot_parser.add_argument("run_dir", help="run directory that holds metrics.json")
     plot_parser.set_defaults(func=_cmd_plot)
+
+    localize_parser = subparsers.add_parser(
+        "localize", help="find the engraved year and write review sheets (no model involved)"
+    )
+    localize_parser.add_argument("--image", default=None, help="one photo")
+    localize_parser.add_argument("--manifest", default=None, help="CSV of images to review")
+    localize_parser.add_argument(
+        "--limit", type=int, default=None, help="first N rows of --manifest"
+    )
+    localize_parser.add_argument("--out-dir", default="runs/localize")
+    localize_parser.add_argument("--max-coins", type=int, default=2)
+    localize_parser.add_argument("--top-k", type=int, default=8, help="candidates kept per image")
+    localize_parser.add_argument("--width", type=int, default=256, help="crop width in pixels")
+    localize_parser.add_argument("--height", type=int, default=96, help="crop height in pixels")
+    localize_parser.set_defaults(func=_cmd_localize)
 
     ensemble_parser = subparsers.add_parser(
         "ensemble", help="evaluate the average of several checkpoints over one or more views"

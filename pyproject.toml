@@ -17,6 +17,7 @@ dependencies = [
     "torch>=2.7,<2.8",
     "torchvision>=0.22,<0.23",
     "matplotlib>=3.9",
+    "scipy>=1.13",
 ]
 
 [project.optional-dependencies]
