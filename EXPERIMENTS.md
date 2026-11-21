@@ -69,6 +69,40 @@ Per digit, pooled over the folds (30-epoch baseline -> recipe):
 Everything improved except 1830, which label smoothing and augmentation squeeze further; bagging two
 seeds brings it back to 0.577 recall (F1 0.698) and is the only thing that measurably helps it.
 
+### Colour mode: grey instead of RGB, and a binarisation control
+
+Screen on fold0 first: rgb 0.9068 / F1 0.8721, grey 0.9237 / 0.9112, binarised (per-image Otsu)
+0.6500 / 0.5970. The binarised run was stopped at epoch 40 of 60 - it had lost 25 pp and the mask
+visualises as specular speckle, the relief that carries the digits is gone. Full cross-validation of
+grey:
+
+| run | last-digit acc | macro F1 |
+|---|---|---|
+| rgb (row 10 recipe) | 0.8758 +- 0.0199 | 0.8149 +- 0.0405 |
+| grey | 0.8860 +- 0.0290 | 0.8444 +- 0.0510 |
+
+Paired per fold: +1.02 pp +- 1.76 (3 of 5 folds better), F1 +2.95 pp +- 3.87. Pooled over all 1756
+validation images: 1556 vs 1538 correct; on the 132 images where the two disagree grey is right 75
+times, McNemar exact p = 0.139. The direction is consistent, the gap is not significant at this
+sample size.
+
+Per digit, pooled (rgb -> grey):
+
+| digit | n | recall | F1 |
+|---|---|---|---|
+| 0 | 26 | 0.462 -> 0.615 | 0.600 -> 0.744 |
+| 1 | 240 | 0.950 -> 0.942 | 0.929 -> 0.946 |
+| 2 | 587 | 0.934 -> 0.951 | 0.904 -> 0.920 |
+| 3 | 178 | 0.725 -> 0.736 | 0.777 -> 0.784 |
+| 5 | 140 | 0.700 -> 0.779 | 0.745 -> 0.781 |
+| 6 | 274 | 0.869 -> 0.832 | 0.847 -> 0.840 |
+| 7 | 311 | 0.916 -> 0.926 | 0.931 -> 0.926 |
+
+The gain lands where the error mass is: 1830 F1 +14.4 pp, its recall back to 0.615 with a single
+model and no seed bagging, and 1835 +3.6 pp. Greying costs nothing at inference - three channels are
+kept, so the pretrained stem and the ONNX graph shape are untouched - and it removes a dimension the
+digit heads were spending capacity on. It also widens the fold-to-fold spread (sd 0.029 vs 0.020).
+
 ## What did not work, and why
 
 - **Class weights** cost 5.9 pp. With 21-26 images in the rare class the weights redistribute
@@ -85,6 +119,9 @@ seeds brings it back to 0.577 recall (F1 0.698) and is the only thing that measu
   are too correlated to help.
 - **Bagging fold models** is invalid, not just weak: each fold model trained on the other folds'
   validation images, so it scores ~1.000 on them. Honest bagging needs several seeds per fold.
+- **Binarisation (per-image Otsu)** cost 25 pp on fold0 (0.650 / F1 0.597 by epoch 40). The threshold
+  lands three quarters up the histogram and keeps the specular highlights while dropping the relief:
+  the digits are read from shading, not from outlines, so a two-level image deletes the signal.
 
 ## Auditing the errors
 
