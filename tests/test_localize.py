@@ -75,6 +75,33 @@ def test_detect_coins_finds_both_coins_of_a_pair():
     assert all(circle.radius == pytest.approx(170, rel=0.15) for circle in circles)
 
 
+def test_rim_radius_prefers_the_outermost_ring():
+    """A shield or a portrait closes its own contour; the circle is still the rim, farther out."""
+    image = _coin()
+    draw = ImageDraw.Draw(image)
+    radius = 180 * 0.5
+    draw.ellipse(
+        [210 - radius, 210 - radius, 210 + radius, 210 + radius], outline=(20, 20, 20), width=6
+    )
+
+    circle = detect_coins(to_gray(image), max_coins=1)[0]
+
+    assert circle.radius == pytest.approx(180, rel=0.15)
+
+
+def test_a_caption_does_not_become_a_circle():
+    """A watermark or a caption gives the accumulator a peak but no rim; it must not be a circle."""
+    image = Image.new("RGB", (900, 620), (24, 24, 28))
+    image.paste(_coin(size=520, centre=(240, 260), radius=210), (0, 0))
+    draw = ImageDraw.Draw(image)
+    draw.text((40, 540), "\u00a9 http://example.com 1837", fill=(235, 235, 235), font=_font(44))
+
+    circles = detect_coins(to_gray(image), max_coins=2)
+
+    assert len(circles) == 1
+    assert circles[0].radius == pytest.approx(210, rel=0.15)
+
+
 def test_uniform_image_yields_no_circle():
     blank = Image.new("RGB", (448, 224), (255, 255, 255))
 

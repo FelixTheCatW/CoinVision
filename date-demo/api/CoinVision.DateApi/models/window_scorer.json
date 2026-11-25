@@ -1,0 +1,45 @@
+{
+  "format": "coinvision-window-scorer",
+  "version": 1,
+  "input": {
+    "name": "windows",
+    "layout": "NCHW",
+    "dtype": "float32",
+    "width": 160,
+    "height": 80,
+    "range": [
+      0.0,
+      1.0
+    ],
+    "channel_order": "RGB",
+    "resize": "affine upright crop of the window, bilinear, no margin"
+  },
+  "output": {
+    "name": "logits",
+    "shape": [
+      "batch"
+    ],
+    "activation": "sigmoid, p(whole year inside this window)"
+  },
+  "sweep": {
+    "arc_degrees": 110.0,
+    "step_degrees": 24.0,
+    "bands": [
+      [
+        0.3,
+        1.1
+      ],
+      [
+        0.6,
+        1.25
+      ]
+    ]
+  },
+  "threshold": 0.1,
+  "trained_on": {
+    "kinds": "engraved",
+    "containment": 0.9,
+    "epochs": 40
+  },
+  "parity_max_abs_diff": 7.82310962677002e-07
+}

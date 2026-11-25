@@ -21,6 +21,7 @@ Nothing here is trained, and everything is deterministic, so it can be tested an
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 import numpy as np
@@ -38,6 +39,23 @@ GLYPH_MIN_HEIGHT = 0.035
 GLYPH_MAX_HEIGHT = 0.16
 GLYPH_MIN_ASPECT = 0.45  # width / height
 GLYPH_MAX_ASPECT = 1.3
+
+# A coin shows several concentric rings of gradient - a shield, a portrait, the beaded rim - and the
+# rim is the one farthest from the centre, not the tallest. Every peak reaching this share of the
+# strongest peak is a candidate, and the outermost of them is taken as the radius.
+RIM_PEAK_SHARE = 0.6
+
+# Two centres closer than this share of the larger radius are the same coin, not two coins.
+CONCENTRIC_SHARE = 0.3
+
+# The accumulator also fires on captions, watermarks and the edge of a slab, and those circles are
+# what "a circle smaller than the coin" looked like in the demo. A real rim is visible at every
+# angle, so a candidate whose per-angle gradient peak falls to nothing on part of the arc is dropped
+# and the next peak is taken instead. Below this score it is not a coin.
+RIM_MIN_SCORE = 0.12
+
+# How many accumulator peaks to try before giving up on finding `max_coins` circles.
+MAX_PICKS = 8
 
 YEAR_DIGITS = 4
 
@@ -97,6 +115,12 @@ def _resize_for_search(gray: np.ndarray, longest: int = 800) -> tuple[np.ndarray
 
 
 def _rim_radius(magnitude: np.ndarray, cx: float, cy: float, shortest: int) -> float | None:
+    """The outermost strong ring around a centre: the coin's rim, not a motif inside it.
+
+    A shield or a portrait closes its own contour, so the radial profile has more than one peak
+    and the tallest of them is often not the rim. The largest radius among the peaks that reach
+    `RIM_PEAK_SHARE` of the maximum wins; a profile with a single strong peak is unchanged.
+    """
     angles = np.linspace(0.0, 2.0 * np.pi, 360, endpoint=False)
     probe = np.linspace(0.18 * shortest, 0.62 * shortest, 220)
     profile = np.zeros(probe.size, dtype=np.float32)
@@ -106,14 +130,64 @@ def _rim_radius(magnitude: np.ndarray, cx: float, cy: float, shortest: int) -> f
         values = ndimage.map_coordinates(magnitude, [sample_y, sample_x], order=1, mode="constant")
         profile[index] = float(np.median(values))
     profile = ndimage.gaussian_filter1d(profile, 2.0)
-    best = int(np.argmax(profile))
-    if profile[best] <= 1e-6:
+    best = float(profile.max())
+    if best <= 1e-6:
         return None
-    return float(probe[best])
+    peaks = np.flatnonzero((profile[1:-1] >= profile[:-2]) & (profile[1:-1] >= profile[2:])) + 1
+    strong = peaks[profile[peaks] >= RIM_PEAK_SHARE * best]
+    if strong.size:
+        return float(probe[int(strong.max())])
+    return float(probe[int(np.argmax(profile))])
+
+
+def _merge_concentric(circles: Sequence[Circle]) -> list[Circle]:
+    """One circle per coin: when two centres are the same coin, keep the circle farther out."""
+    merged: list[Circle] = []
+    for circle in circles:
+        for index, kept in enumerate(merged):
+            gap = float(np.hypot(circle.cx - kept.cx, circle.cy - kept.cy))
+            if gap > CONCENTRIC_SHARE * max(circle.radius, kept.radius):
+                continue
+            if circle.radius > kept.radius:
+                merged[index] = circle
+            break
+        else:
+            merged.append(circle)
+    return merged
+
+
+def _rim_score(magnitude: np.ndarray, cx: float, cy: float, radius: float) -> float:
+    """How much of the circle actually sits on an edge, from 0 (nothing) to 1 (all the way round).
+
+    The gradient magnitude is sampled in a +-10% band around `radius` at 180 angles; the score is
+    the 10th percentile of those per-angle maxima over their median. A coin's rim peaks at every
+    angle, a caption or a slab edge only on part of the arc. Angles that leave the frame read as
+    nothing, so a badly placed circle is not rescued by the part of its arc that happens to lie
+    inside the picture.
+    """
+    angles = np.linspace(0.0, 2.0 * np.pi, 180, endpoint=False)
+    band = np.linspace(0.9 * radius, 1.1 * radius, 15)
+    heights = np.empty(angles.size, dtype=np.float32)
+    for index, angle in enumerate(angles):
+        heights[index] = ndimage.map_coordinates(
+            magnitude,
+            [cy + band * np.sin(angle), cx + band * np.cos(angle)],
+            order=1,
+            mode="constant",
+        ).max()
+    median = float(np.median(heights))
+    if median <= 1e-6:
+        return 0.0
+    return float(np.percentile(heights, 10.0)) / median
 
 
 def detect_coins(gray: np.ndarray, max_coins: int = 2) -> list[Circle]:
-    """Circle centres by gradient voting, then a rim radius per centre; strongest first."""
+    """Circle centres by gradient voting, then the outermost rim radius per centre.
+
+    Strongest first. A peak whose rim is not visible round the whole circle (a caption, a watermark,
+    a slab edge) is skipped and the next peak is tried; a second peak on a coin that is already
+    found (a shield inside the rim) is dropped, so a frame holding one coin yields one circle.
+    """
     small, scale = _resize_for_search(gray)
     height, width = small.shape
     shortest = min(height, width)
@@ -140,19 +214,32 @@ def detect_coins(gray: np.ndarray, max_coins: int = 2) -> list[Circle]:
     accumulator = ndimage.gaussian_filter(accumulator, 3.0)
     circles: list[Circle] = []
     working = accumulator.copy()
-    for _ in range(max_coins):
+    rejected: list[tuple[float, Circle]] = []
+    for _ in range(MAX_PICKS):
+        if len(circles) >= max_coins:
+            break
         flat = int(np.argmax(working))
         if float(working.flat[flat]) <= 0.0:
             break
         center_y, center_x = divmod(flat, width)
         radius = _rim_radius(magnitude, float(center_x), float(center_y), shortest)
         if radius is not None:
-            circles.append(Circle(cx=center_x / scale, cy=center_y / scale, radius=radius / scale))
-        # Non-maximum suppression: one coin per centre.
+            score = _rim_score(magnitude, float(center_x), float(center_y), radius)
+            circle = Circle(cx=center_x / scale, cy=center_y / scale, radius=radius / scale)
+            if score >= RIM_MIN_SCORE:
+                circles.append(circle)
+            else:
+                rejected.append((score, circle))
+        # Non-maximum suppression: one coin per centre, kept whether or not it passed the filter.
         radius_px = max(radius or 0.2 * shortest, 0.2 * shortest)
         yy, xx = np.ogrid[:height, :width]
         working[(xx - center_x) ** 2 + (yy - center_y) ** 2 <= (radius_px * 1.1) ** 2] = 0.0
-    return circles
+    # A coin cut by the frame leaves a rim on part of the arc only, so the filter can reject every
+    # peak; then the best rejected one is a better answer than nothing. A photo where one circle
+    # did pass keeps only that one: filling the second slot is how a caption became a coin.
+    if not circles and rejected:
+        circles.append(max(rejected, key=lambda item: item[0])[1])
+    return _merge_concentric(circles)
 
 
 def detect_coin(gray: np.ndarray) -> Circle | None:
@@ -340,18 +427,26 @@ def localize_date(
 
 
 def ring_windows(
-    circle: Circle, arc_degrees: float = 46.0, step_degrees: float = 11.5
+    circle: Circle,
+    arc_degrees: float = 46.0,
+    step_degrees: float = 11.5,
+    bands: Sequence[tuple[float, float]] = ((0.52, 0.76), (0.74, 0.92)),
 ) -> list[DateCandidate]:
     """Cover the ring with overlapping windows, without any glyph segmentation.
 
     The glyph grouping fires on the legend and the beaded rim as often as on the year, so this brute
     sweep is the fallback that guarantees the year is somewhere in the candidate set.
+
+    `bands` are radial extents as fractions of the circle radius. The default pair is thin: a year
+    block is about 0.3 r thick, so the annotated year never fits inside one window of the default
+    grid - `scripts/window_scorer.py` sweeps a single thick band (0.32, 1.02) instead, which lifts
+    "one window holds the whole year" from 0% to 82% of annotated photos.
     """
     windows: list[DateCandidate] = []
     arc = np.radians(arc_degrees)
     step = np.radians(step_degrees)
     count = int(round(2.0 * np.pi / step))
-    for inner_f, outer_f in ((0.52, 0.76), (0.74, 0.92)):
+    for inner_f, outer_f in bands:
         inner = circle.radius * inner_f
         outer = circle.radius * outer_f
         radius_mid = 0.5 * (inner + outer)
