@@ -203,6 +203,8 @@ onUnmounted(() => {
             <tr>
               <th>#</th>
               <th class="right">p</th>
+              <th>источник</th>
+              <th class="right">размер</th>
               <th class="right">угол</th>
               <th class="right">центр</th>
             </tr>
@@ -211,6 +213,10 @@ onUnmounted(() => {
             <tr v-for="window in result.topWindows" :key="window.index">
               <td class="mono">{{ window.index }}</td>
               <td class="right mono">{{ window.score.toFixed(3) }}</td>
+              <td class="mono">{{ window.source === 'detector' ? 'детектор' : 'кольцо' }}</td>
+              <td class="right mono">
+                {{ window.arcSpan.toFixed(0) }}×{{ window.radialSpan.toFixed(0) }}
+              </td>
               <td class="right mono">{{ window.angleDeg.toFixed(0) }}°</td>
               <td class="right mono">
                 {{ window.centerX.toFixed(0) }}, {{ window.centerY.toFixed(0) }}

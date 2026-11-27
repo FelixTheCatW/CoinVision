@@ -15,7 +15,8 @@ public sealed record WindowDto(
     int Y0,
     int X1,
     int Y1,
-    double Score);
+    double Score,
+    string Source = "ring");
 
 /// <summary>Where the time went, in milliseconds.</summary>
 public sealed record TimingDto(
