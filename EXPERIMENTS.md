@@ -425,6 +425,59 @@ supplying the verdict and the crop a human can check - the localiser is not on t
 the digits. To make locate-then-read real, the reader has to be trained on the crops the localiser
 actually produces, which is a different experiment from making the localiser better.
 
+## A reader trained on crops does read crops
+
+So train one. The first question was where the crop should come from, and the answer is not the
+winner's centre: over 12 ring wins the year's centre sat 0.35 of the window's half-width away (max
+0.50) and a box shrunk about that centre held the year **0 times out of 12** - it cuts empty metal.
+Over 43 detector wins the offset was at most 0.11 and the shrunk box held the year 43 of 43. The
+detector is the only part of the pipeline that says where the year is, so crops come from its quad
+and `reading_box`/`reading_crop` now return `None` for a ring win with no detector proposal nearby
+instead of pretending to know.
+
+1643 annotated photos yielded a detector quad holding the year; each gave four 448x224 crops - the
+serving crop, two jitters (rotation +-5 degrees, scale 0.92-1.08, shift +-3%), and the annotated box
+itself. Variants live in separate directories under identical filenames so `listing_id` groups every
+variant and every shot of one listing into a single fold; train/val intersection by photo is 0 in all
+five folds. Recipe is the project's own (`configs/default.toml`), cut to 20 epochs: validation reaches
+0.976-0.983 by epoch 7 and an epoch costs 84 s, so the 60 of the whole-frame recipe buys nothing.
+
+| fold | 0 | 1 | 2 | 3 | 4 | out-of-fold |
+|---|---|---|---|---|---|---|
+| whole year | 0.988 | 0.989 | 0.982 | 0.992 | 0.988 | **0.988** (6493/6572 crops) |
+
+On the serving path - the highest-scoring detector quad, no oracle, whole-frame reader only if the
+detector proposes nothing - it is **0.987** (1621/1643). All 1643 had a detector proposal, so the
+fallback never fired; where the winning quad really did contain the year (1630 photos) it read 0.987,
+and of the 13 where it did not, 12 were still read correctly.
+
+The comparison that matters is on the same photos, because the two populations are easy to mix up:
+
+| reader | photos | right |
+|---|---|---|
+| whole frame | 1643 | 1494 = 0.909 |
+| detector quad crop | 1643 | 1621 = 0.987 |
+
+**+7.8 pp**, 127 more photos read correctly. Over the whole 1756-photo set the frame reader is 0.876,
+but that number hides the split: engraved 0.906, slab 0.368. Slabs stay out of scope - the crop
+reader is not trained on them at all.
+
+Two traps this section exists to prevent. First, the frame models in `onnx/` were trained on
+`data/manifests/folds5` and the crop reader on `data/manifests_reading/folds5`; scoring a photo with
+"its" fold taken from the other partition feeds the model a photo it trained on, and that mistake
+alone reported 0.984 where the truth was 0.909. Second, 15 photos have no detector quad and 7 carry a
+year but no corners, so the crop path covers 1643 of 1665 annotated photos; those go to the frame
+reader, giving roughly 0.985 over the annotated population.
+
+The reader exports to `onnx/reading_reader_{0..4}.onnx` with `onnx/reading_reader.json` via
+`scripts/export_reader.py` (there was no export command in the tree - the shipped classifier's ONNX
+files were built outside it). Parity against the checkpoints is 1.2e-06, and torch and ONNX agree on
+the same 200 crops digit for digit. The metadata keeps the classifier's convention: RGB in [0, 1],
+bilinear antialias resize to 448x224, ImageNet mean/std applied by the caller.
+
+What this does not solve: the refusal. The reader is trained on photos that all have a year, so it
+will still read digits off a frame that has none.
+
 ## Throughput notes
 
 | step | before | after |

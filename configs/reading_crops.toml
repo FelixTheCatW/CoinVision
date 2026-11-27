@@ -1,0 +1,28 @@
+# A reader trained on the crops the detector produces, not on whole photographs.
+#
+# The whole-frame reader in onnx/ scores 0.876 out-of-fold on whole photos but collapses on crops
+# (6 of 40), and it is frame-layout that carries it - accuracy falls monotonically as the input
+# zooms in. The detector's quad is the one place in the pipeline that says where the year sits
+# (offset <= 0.11 of the half-width, 43 wins out of 43), so crops are cut from it and the recipe is
+# the project's own measured winner (configs/default.toml), unchanged.
+#
+# Crop coverage: 1665 annotated photos carry a year, of which those with a detector quad that holds
+# the year become training crops. Serving only needs the reader where the detector fired, which was
+# 78.5% of photos in the end-to-end measurement.
+#
+# Fold manifests come from:
+#   uv run coinvision split --manifest data/manifests_reading/all.csv --folds 5 \
+#       --out-dir data/manifests_reading/folds5
+# Variants of one photo sit in different directories under the same filename, so listing_id groups
+# them (and every shot of the listing) into a single fold instead of leaking jitters into val.
+
+[data]
+train_manifest = "data/manifests_reading/folds5/fold0_train.csv"
+val_manifest = "data/manifests_reading/folds5/fold0_val.csv"
+
+[train]
+# 20 epochs, not the 60 of the whole-frame recipe: on tight crops validation reaches 0.976-0.983 by
+# epoch 7 and the recipe's own best epoch lands early, while an epoch costs 88 s here. The cosine
+# schedule is budgeted over these 20 so the run still anneals properly.
+epochs = 20
+out_dir = "runs/reading/fold0"
