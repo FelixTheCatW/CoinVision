@@ -396,6 +396,35 @@ high; the same crop of the original, resized to the same 448x224, reads "1830" a
 "1837 G.BRITAIN 1SOV" without effort. The information exists, this input throws it away, and the
 attempts above show the network cannot recover it from 1400 images.
 
+## Locating does not feed reading
+
+The four-digit classifier in `api/CoinVision.Api` (five folds, 448x224 input) is a whole-frame model,
+and it does not survive being fed a crop. Feeding the same annotated photos through it, resized to its
+input, gives:
+
+| input | right | mean confidence |
+|---|---|---|
+| whole frame | 30/30 | 0.67 |
+| the coin's bounding box | 17/30 | 0.29 |
+| winner x2 | 7/30 | 0.24 |
+| winner x4 | 17/30 | 0.32 |
+| winner x8 | 27/30 | 0.52 |
+| the year itself, 160x80 | 6/40 | 0.24 |
+
+The tight crop - the thing the localiser exists to produce - is the worst input of all, and accuracy
+falls monotonically as the input zooms in. That is the signature of a model reading layout rather
+than legibility: change the framing and it loses the plot, however much bigger the digits become.
+Feeding it 448x224 instead of 160x80 changes nothing (6/40 either way), so the failure is framing,
+not resolution.
+
+The caveat is that these are the photos that classifier was trained on, so 30/30 overstates it; its
+out-of-fold figure was about 0.93. The comparison between inputs is the finding, not the absolute.
+
+Two consequences. Today the honest product path is whole frame to the reader, with the localiser
+supplying the verdict and the crop a human can check - the localiser is not on the critical path for
+the digits. To make locate-then-read real, the reader has to be trained on the crops the localiser
+actually produces, which is a different experiment from making the localiser better.
+
 ## Throughput notes
 
 | step | before | after |

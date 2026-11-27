@@ -105,6 +105,69 @@ def crop_corners(
     )
 
 
+# The reader is a second model with a different appetite: it was trained on tight year blocks at
+# 448x224. The localiser's windows are wider than the year by design - the metric is containment, so
+# a window only has to hold the year, not frame it. Feeding a ring window straight to the reader
+# turned a confident 1832 into a shaky 1837, because the digits shrink threefold and the framing is
+# wrong. reading_crop hands the reader a box the size of the year instead.
+#
+# The two sources need different treatment, measured over 200 annotated photos: the annotated year
+# fills 0.34 x 0.23 of a winning ring window but 0.73 x 0.68 of a winning detector quad, so the ring
+# one is shrunk by the first ratio and the detector one is used as it comes.
+READ_SIZE = (448, 224)
+READ_SHRINK = {"ring": (0.34, 0.23), "detector": (1.0, 1.0)}
+
+
+def _axes(corners: np.ndarray) -> tuple[np.ndarray, np.ndarray, float, float]:
+    """Centre, unit vector along the reading direction, and the two full side lengths."""
+    width = float(np.linalg.norm(corners[1] - corners[0]))
+    height = float(np.linalg.norm(corners[3] - corners[0]))
+    along = (corners[1] - corners[0]) / max(width, 1e-9)
+    return corners.mean(axis=0), along, width, height
+
+
+def _rect(center: np.ndarray, along: np.ndarray, width: float, height: float) -> np.ndarray:
+    """The four corners of a rectangle of that size, turned with the reading direction."""
+    across = np.array([-along[1], along[0]])
+    half_width, half_height = width / 2.0, height / 2.0
+    return np.array(
+        [
+            center - half_width * along - half_height * across,
+            center + half_width * along - half_height * across,
+            center + half_width * along + half_height * across,
+            center - half_width * along + half_height * across,
+        ]
+    )
+
+
+def reading_box(candidates: Sequence[Candidate], best: Candidate) -> np.ndarray:
+    """The tight quadrilateral the reader should see, built from whichever candidate won."""
+    shrink_x, shrink_y = READ_SHRINK.get(best.source, (1.0, 1.0))
+    center, along, width, height = _axes(np.asarray(best.corners, dtype=np.float64))
+    return _rect(center, along, width * shrink_x, height * shrink_y)
+
+
+def _fit_aspect(corners: np.ndarray, aspect: float) -> np.ndarray:
+    """Grow the shorter side so the crop is not stretched: the reader learned one aspect only."""
+    center, along, width, height = _axes(np.asarray(corners, dtype=np.float64))
+    if width / height < aspect:
+        width = height * aspect
+    else:
+        height = width / aspect
+    return _rect(center, along, width, height)
+
+
+def reading_crop(
+    image: Image.Image,
+    candidates: Sequence[Candidate],
+    best: Candidate,
+    size: tuple[int, int] = READ_SIZE,
+):
+    """The crop that goes to the reader: the year's size, at the reader's aspect."""
+    box = _fit_aspect(reading_box(candidates, best), size[0] / size[1])
+    return crop_corners(image, box, size, CROP_FILTER.get(best.source, CROP_FILTER_DEFAULT))
+
+
 def crop_candidate(image: Image.Image, candidate: Candidate, size: tuple[int, int] = CROP_SIZE):
     """The crop for one candidate, under the filter its source was trained with."""
     return crop_corners(
