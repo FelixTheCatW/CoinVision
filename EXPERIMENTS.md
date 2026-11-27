@@ -317,21 +317,21 @@ End to end on the 1747 annotated photos, through the same pipeline both sides:
 
 | | sweep + 1637-photo ranker | sweep + detector + mixed ranker |
 |---|---|---|
-| recall@1@0.9 | 0.872 | 0.928 |
+| recall@1@0.9 | 0.872 | 0.927 |
 | ceiling | 0.917 | 0.995 |
 | candidates per photo | 58 | 63 |
 
 On the 353 photos of the detector's own held-out fold - the part the deployed model never saw - the
-same pipeline gives 0.994 ceiling and 0.921, so the 0.928 is not inflated by the detector scoring its
+same pipeline gives 0.992 ceiling and 0.921, so the 0.927 is not inflated by the detector scoring its
 own training crops.
 
 ### The verdict stopped working
 
 | threshold | passes | of passes, top-1 right |
 |---|---|---|
-| 0.05 | 1.000 | 0.928 |
-| 0.10 | 1.000 | 0.928 |
-| 0.50 | 1.000 | 0.928 |
+| 0.05 | 1.000 | 0.927 |
+| 0.10 | 1.000 | 0.927 |
+| 0.50 | 1.000 | 0.927 |
 | 0.90 | 0.996 | 0.931 |
 
 The cut no longer cuts. With the detector in the candidate list, 10.3% of candidates are positives
@@ -357,12 +357,17 @@ so the detector's canvas is resampled with Linear where Python uses LANCZOS. On 
 the quads land in the same place - centre 1413.5, 641.9 and angle -38.6 against 1413.6, 638.4 and
 -38.2 - with the predicted size about 7% apart.
 
-That difference is not free on the Python side either: the mixed cache was built with detector crops
-resampled by bilinear and the arc crops by bicubic, so no single filter matches both halves of the
-training set, and moving the detector branch onto the bicubic path moved the end-to-end number from
-0.928 to 0.910 on the first 1200 photos of a re-run. The ranker is trained on each branch's own
-filter; a serving path that changes them is a train/serve mismatch of about 2 pp, small enough to
-hide behind the fold spread and large enough to be worth pinning down.
+The same trap sat on the Python side, and it cost 1.7 pp before anyone looked. The two caches were
+built separately, so the ranker learned each source under its own filter - arc windows through
+`crop_upright` (bicubic), detector quads through `quad_crop` (bilinear) - while the serving pipeline
+cropped everything bicubically. Measured end to end on the first 1200 photos that read 0.910, not
+0.928: a train/serve mismatch the size of the fold spread, which is exactly why it hid.
+
+The fix is `CROP_FILTER` in `coinvision.pipeline`, a per-source filter applied by `crop_candidate`,
+and it is verified rather than assumed - the shipped crops are pixel-identical to the ones the caches
+hold, `max |diff| = 0.0` for both sources. The full re-run through the served path then measures
+0.927 over all 1747 photos and 0.921 on the detector's held-out fold, ceiling 0.995 and 0.992, at
+18 minutes for the sweep, the detector and the ranker together.
 
 
 ## What did not work, and why
@@ -440,7 +445,7 @@ uv run python scripts/window_scorer.py train --cache data/annotations/windows_ca
 1. **Data.** 1833 (recall 0.753) and 1835 (0.679) hold most of the remaining error mass, and 1830 has
    26 images total. Nothing in the pipeline compensates for that.
 2. **A date detector.** Done: the heatmap detector covers 0.965 of photos and the union with the
-   sweep 0.995, which moved end-to-end recall@1 from 0.872 to 0.928. What it did not fix is the
+   sweep 0.995, which moved end-to-end recall@1 from 0.872 to 0.927. What it did not fix is the
    refusal - see 4.
 3. **Seed averaging in reporting.** Two seeds differ by up to 2 pp on one fold, so a single run is not
    a measurement: report the mean of two seeds (~0.880 for the current recipe).

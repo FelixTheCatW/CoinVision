@@ -477,7 +477,7 @@ def cmd_export(args: argparse.Namespace) -> int:
             "height": int(payload["crop_size"][1]),
             "range": [0.0, 1.0],
             "channel_order": "RGB",
-            "resize": "affine upright crop of the window, bilinear, no margin",
+            "resize": "affine upright crop of the window, bicubic, no margin",
         },
         "output": {
             "name": "logits",

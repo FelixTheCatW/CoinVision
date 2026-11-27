@@ -24,6 +24,14 @@ from coinvision.localize import Circle, DateCandidate, detect_coins, ring_window
 # The ranker reads 160x80 crops; the aspect matches a year block, four digits side by side.
 CROP_SIZE = (160, 80)
 
+# The ranker saw each source under that source's own filter, because the two caches were built
+# separately: arc windows went through crop_upright (bicubic) and detector quads through quad_crop
+# (bilinear). Serving has to keep that split - cropping a detector quad bicubically moved the
+# end-to-end number from 0.928 to 0.910 on the first 1200 photos of a re-run, which is the size of a
+# train/serve mismatch that hides behind the fold spread.
+CROP_FILTER = {"ring": Resampling.BICUBIC, "detector": Resampling.BILINEAR}
+CROP_FILTER_DEFAULT = Resampling.BICUBIC
+
 
 @dataclass
 class Candidate:
@@ -74,11 +82,16 @@ def window_corners(candidate: DateCandidate) -> np.ndarray:
     return np.asarray(corners, dtype=np.float64)
 
 
-def crop_corners(image: Image.Image, corners: np.ndarray, size: tuple[int, int] = CROP_SIZE):
+def crop_corners(
+    image: Image.Image,
+    corners: np.ndarray,
+    size: tuple[int, int] = CROP_SIZE,
+    resample: Resampling = CROP_FILTER_DEFAULT,
+):
     """Resample the quadrilateral into an upright crop, x1->x2 running along the reading direction.
 
-    This is the one crop routine of the stage: the ring windows and the detector quads both come
-    through here, so a candidate crops the same way whichever source proposed it.
+    This is the one crop routine of the stage, and the filter is an argument because the ranker was
+    trained on two different ones - see CROP_FILTER.
     """
     width, height = size
     origin = corners[0]
@@ -88,7 +101,14 @@ def crop_corners(image: Image.Image, corners: np.ndarray, size: tuple[int, int] 
         size,
         Transform.AFFINE,
         (a[0], b[0], origin[0], a[1], b[1], origin[1]),
-        resample=Resampling.BICUBIC,
+        resample=resample,
+    )
+
+
+def crop_candidate(image: Image.Image, candidate: Candidate, size: tuple[int, int] = CROP_SIZE):
+    """The crop for one candidate, under the filter its source was trained with."""
+    return crop_corners(
+        image, candidate.corners, size, CROP_FILTER.get(candidate.source, CROP_FILTER_DEFAULT)
     )
 
 
@@ -98,7 +118,7 @@ def score_candidates(scorer, image: Image.Image, candidates: Sequence[Candidate]
         return
     crops = np.stack(
         [
-            np.asarray(crop_corners(image, candidate.corners), dtype=np.float32) / 255.0
+            np.asarray(crop_candidate(image, candidate), dtype=np.float32) / 255.0
             for candidate in candidates
         ]
     )
@@ -150,5 +170,5 @@ def run(
         coins=coins,
         candidates=candidates,
         best=best,
-        crop=None if best is None else crop_corners(image, best.corners),
+        crop=None if best is None else crop_candidate(image, best),
     )

@@ -28,7 +28,7 @@ app.MapGet("/api/health", () => Results.Ok(new { status = "ok", time = DateTime.
 
 app.MapGet("/api/info", (WindowScorer scorer) => Results.Ok(new InfoResponse(
     "one ranker over two sources: 110 deg arc windows (bands 0.30-1.10 + 0.60-1.25) and the detector's year quads; "
-        + "1637 photos, 5-fold recall@1 0.971+-0.017 inside the window cache, 0.928 end-to-end, threshold from metadata",
+        + "1637 photos, 5-fold recall@1 0.971+-0.017 inside the window cache, 0.927 end-to-end, threshold from metadata",
     scorer.Width,
     scorer.Height,
     scorer.Meta.ArcDegrees,

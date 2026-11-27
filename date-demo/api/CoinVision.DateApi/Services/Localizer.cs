@@ -415,7 +415,13 @@ public sealed class Localizer
         {
             canvas.Clear(SKColors.Black);
             canvas.Concat(ref inverse);
-            canvas.DrawBitmap(source, 0, 0, new SKSamplingOptions(SKCubicResampler.CatmullRom));
+            // The ranker learned each source under its own filter: arc windows bicubic, detector
+            // quads bilinear, because the two training caches were built by different scripts.
+            // Cropping everything one way is a train/serve mismatch worth about 1.7 pp.
+            var sampling = window.Source == "detector"
+                ? new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.None)
+                : new SKSamplingOptions(SKCubicResampler.CatmullRom);
+            canvas.DrawBitmap(source, 0, 0, sampling);
         }
 
         return crop;
