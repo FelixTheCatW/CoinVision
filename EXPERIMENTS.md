@@ -266,6 +266,105 @@ One practical rule for whoever regenerates the master file: it must not carry a 
 `read_manifest` opens it as plain utf-8, so a BOM renames the first column to `\ufeffimage` and every
 consumer - this script and `date_annotations.py check` - silently sees no image paths at all.
 
+## Stop sweeping, predict the block
+
+The previous section ended on a diagnosis: the ceiling was 0.917, `recall@1@0.9 given a good window`
+was 1.000, so the ranker had nothing left to win and the 8.3% of photos without a suitable window
+were a detection problem. This is the detector.
+
+Design: a small U-Net over a letterboxed 512x320 canvas emits seven maps at stride 4 - a heatmap of
+the block centre, the block width and height as canvas fractions, the doubled angle as (cos, sin),
+and a sub-cell offset. The offset is not a refinement: at stride 4 the centre is otherwise up to
+4 canvas pixels out, which is about 12 pixels on a 1500 px photo, and no crop holding a 50 px year
+block survives that. Measured on the same two folds and 12 epochs, the offset alone moved coverage
+from 0.676 / 0.490 to 0.864 / 0.834.
+
+Two geometry bugs cost a day between them, and both were invisible in the loss:
+
+- The heatmap gaussian was centred at `round(cx / stride - 0.5)` while the regression was written to
+  `round(cx / stride)`. The peak landed on a cell whose regression target was zero, so the model
+  learned "centre here, size zero" and coverage sat at exactly 0.000 for every epoch. Fixed by
+  centring the gaussian on the cell centre and smearing the regression across the plateau, so a peak
+  on a neighbouring cell still reads a usable box.
+- `containment` mixed up two components of the 2x2 inverse, so a quad did not contain itself: 0.149
+  instead of 1.0. Every number produced before that fix was meaningless, and the only reason it was
+  caught is a self-containment check on a synthetic quad.
+
+Five folds, 25 epochs each:
+
+| fold | 0 | 1 | 2 | 3 | 4 | pooled |
+|---|---|---|---|---|---|---|
+| covered@0.9 | 0.959 | 0.949 | 0.974 | 0.964 | 0.977 | 0.965 +- 0.010 |
+
+0.965 against 0.917 for the sweep - the detector alone beats the grid's ceiling by 4.8 pp. The union
+of the two sources is 0.995, and the mixed candidate cache (97170 arc windows plus 4906 detector
+crops over the same 1637 photos) has no photo without a covering candidate at all: a ceiling of 100%.
+
+One epoch cost 200 s, not the 130 s measured earlier: the card settles at 81 C and throttles, and the
+whole run took 7 h rather than the estimated 4.5. Batch 16 is not the way out - 4.8 s per step against
+1.2 for batch 8, because 4 GiB of memory starts thrashing.
+
+One ranker over both candidate types, 40 epochs, five folds:
+
+| | sweep only | sweep + detector |
+|---|---|---|
+| folds, recall@1@0.9 | 0.932 0.924 0.958 0.933 0.910 | 0.960 0.943 0.991 0.982 0.978 |
+| pooled recall@1@0.9 | 0.931 +- 0.015 | 0.971 +- 0.017 |
+| recall@5@0.9 | 0.963 +- 0.004 | 0.998 +- 0.001 |
+| ceiling, cache metric | 96.6% | 100.0% |
+
+End to end on the 1747 annotated photos, through the same pipeline both sides:
+
+| | sweep + 1637-photo ranker | sweep + detector + mixed ranker |
+|---|---|---|
+| recall@1@0.9 | 0.872 | 0.928 |
+| ceiling | 0.917 | 0.995 |
+| candidates per photo | 58 | 63 |
+
+On the 353 photos of the detector's own held-out fold - the part the deployed model never saw - the
+same pipeline gives 0.994 ceiling and 0.921, so the 0.928 is not inflated by the detector scoring its
+own training crops.
+
+### The verdict stopped working
+
+| threshold | passes | of passes, top-1 right |
+|---|---|---|
+| 0.05 | 1.000 | 0.928 |
+| 0.10 | 1.000 | 0.928 |
+| 0.50 | 1.000 | 0.928 |
+| 0.90 | 0.996 | 0.931 |
+
+The cut no longer cuts. With the detector in the candidate list, 10.3% of candidates are positives
+instead of 6.0%, the ranker answers on every photo, and precision equals accuracy because nothing is
+ever rejected. The reason is the same one the previous section recorded: there is still no negative
+class, so the model has never seen a photo that should come back empty and it saturates near 1.0 on
+crops that hold a year.
+
+Tried and rejected before paying for a retrain: on the 145 photos the sweep misses, the detector
+covers the year on 51, but the sweep-trained ranker scored those 51 crops above 0.1 only 3 times and
+was right on none. The crops were out of its distribution, not merely less preferred - which is why
+the fix had to be one ranker trained on both candidate types rather than a fallback rule.
+
+### Ports
+
+Candidates from either source reduce to four corners, so there is one crop routine and the demo can
+draw either kind without knowing where it came from. `CoinVisionsSteps` reproduces the reference crop
+to 0.0 pixel difference, checked against the Python pipeline on a detector quad; mirroring the corner
+order instead costs a mean difference of 27.7, so the orientation is pinned by that check.
+
+The C# demo differs in one respect that cannot be closed: this SkiaSharp build has no cubic filter,
+so the detector's canvas is resampled with Linear where Python uses LANCZOS. On the reference photo
+the quads land in the same place - centre 1413.5, 641.9 and angle -38.6 against 1413.6, 638.4 and
+-38.2 - with the predicted size about 7% apart.
+
+That difference is not free on the Python side either: the mixed cache was built with detector crops
+resampled by bilinear and the arc crops by bicubic, so no single filter matches both halves of the
+training set, and moving the detector branch onto the bicubic path moved the end-to-end number from
+0.928 to 0.910 on the first 1200 photos of a re-run. The ranker is trained on each branch's own
+filter; a serving path that changes them is a train/serve mismatch of about 2 pp, small enough to
+hide behind the fold spread and large enough to be worth pinning down.
+
+
 ## What did not work, and why
 
 - **Class weights** cost 5.9 pp. With 21-26 images in the rare class the weights redistribute
@@ -317,17 +416,39 @@ uv run coinvision ensemble --manifest data/manifests/folds5/fold0_val.csv \
   --checkpoint runs/cv5_combo/fold0/best.pt --checkpoint runs/cv5_combo_seed1/fold0/best.pt
 ```
 
+The date-localisation stage has its own chain:
+
+```bash
+# ring-window ranker: cache the sweep over the annotated photos, train, export
+uv run python scripts/window_scorer.py cache --photos 1637
+uv run python scripts/window_scorer.py train --folds 5 --out data/annotations/window_scorer.json
+uv run python scripts/window_scorer.py export
+
+# detector: cache the letterboxed canvases, train, export
+uv run python scripts/date_detector.py cache
+uv run python scripts/date_detector.py train --folds 5 --epochs 25
+uv run python scripts/date_detector.py export
+
+# the shipped configuration is one ranker over both candidate types: merge the detector's crops
+# into the arc cache, then train the same way
+uv run python scripts/mix_detector_crops.py
+uv run python scripts/window_scorer.py train --cache data/annotations/windows_cache_mixed.npz   --folds 5 --out data/annotations/window_scorer_mixed.json
+```
+
 ## Open levers
 
 1. **Data.** 1833 (recall 0.753) and 1835 (0.679) hold most of the remaining error mass, and 1830 has
    26 images total. Nothing in the pipeline compensates for that.
-2. **A real date detector.** Every crop attempt failed on where to crop, not on the crops themselves;
-   a detector trained on a few hundred boxes would answer it, and the label text of a slab is nearly
-   an OCR problem.
+2. **A date detector.** Done: the heatmap detector covers 0.965 of photos and the union with the
+   sweep 0.995, which moved end-to-end recall@1 from 0.872 to 0.928. What it did not fix is the
+   refusal - see 4.
 3. **Seed averaging in reporting.** Two seeds differ by up to 2 pp on one fold, so a single run is not
    a measurement: report the mean of two seeds (~0.880 for the current recipe).
-4. **A negative class.** The five photos with no legible date cannot teach "there is no date", so the
-   verdict can only fail by scoring a wrong window too high - it never knows that no window should be
-   high. A hundred real dateless photos would give it that option (erased ones would not: a filled-in
-   patch is a smooth-metal artifact, not the "illegible because small, blurred or glared" class that
-   actually occurs), and the cache would have to include photos with no positive window at all.
+4. **A negative class.** Now the top lever, and the detector made it worse rather than better: with
+   positives at 10.3% of candidates the ranker answers on 100% of photos and its score saturates at
+   1.000, so the threshold in the metadata no longer rejects anything. The five photos with no legible
+   date cannot teach "there is no date". A hundred real dateless photos would (erased ones would not:
+   a filled-in patch is a smooth-metal artifact, not the "illegible because small, blurred or glared"
+   class that actually occurs), and the cache would have to include photos with no positive window at
+   all so the model sees whole photos that should come back empty. Until then any serving layer needs
+   its own sanity gate for blank frames, which the ranker will happily call a date.

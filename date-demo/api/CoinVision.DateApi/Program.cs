@@ -7,8 +7,11 @@ var baseDir = AppContext.BaseDirectory;
 var modelDir = Path.Combine(baseDir, "models");
 var onnxPath = Path.Combine(modelDir, "window_scorer.onnx");
 var metaPath = Path.Combine(modelDir, "window_scorer.json");
+var detectorPath = Path.Combine(modelDir, "date_detector.onnx");
+var detectorMetaPath = Path.Combine(modelDir, "date_detector.json");
 
 builder.Services.AddSingleton(_ => new WindowScorer(onnxPath, metaPath));
+builder.Services.AddSingleton(_ => new DateDetector(detectorPath, detectorMetaPath));
 builder.Services.AddSingleton<Localizer>();
 builder.Services.AddSingleton<DatePipeline>();
 builder.Services.Configure<Microsoft.AspNetCore.Http.Features.FormOptions>(options =>
@@ -24,7 +27,8 @@ app.UseStaticFiles();
 app.MapGet("/api/health", () => Results.Ok(new { status = "ok", time = DateTime.UtcNow }));
 
 app.MapGet("/api/info", (WindowScorer scorer) => Results.Ok(new InfoResponse(
-    "window scorer (two bands 0.30-1.10 + 0.60-1.25, containment 0.9, 1637 photos, 5-fold recall@1 0.931+-0.015, threshold from metadata)",
+    "one ranker over two sources: 110 deg arc windows (bands 0.30-1.10 + 0.60-1.25) and the detector's year quads; "
+        + "1637 photos, 5-fold recall@1 0.971+-0.017 inside the window cache, 0.928 end-to-end, threshold from metadata",
     scorer.Width,
     scorer.Height,
     scorer.Meta.ArcDegrees,

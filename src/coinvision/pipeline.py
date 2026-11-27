@@ -1,0 +1,154 @@
+"""The date-localisation pipeline: candidates from the ring sweep and from the detector, one score.
+
+Two sources propose where the year might be. The ring sweep is label-free and covers the annulus
+blindly; the detector predicts the block's rectangle outright. Their candidate sets overlap but each
+one covers photos the other misses - union coverage on the annotated set is 0.995 against 0.917 for
+the sweep alone - so both run and a single ranker scores the merged list. One ranker, not two,
+because two separately trained models have no reason to agree on what a score means.
+
+Every candidate is reduced to four corners, so one crop routine serves both and the demo can draw
+either without knowing where it came from.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Sequence
+from dataclasses import dataclass, field
+
+import numpy as np
+from PIL import Image
+from PIL.Image import Resampling, Transform
+
+from coinvision.localize import Circle, DateCandidate, detect_coins, ring_windows, to_gray
+
+# The ranker reads 160x80 crops; the aspect matches a year block, four digits side by side.
+CROP_SIZE = (160, 80)
+
+
+@dataclass
+class Candidate:
+    """One place the year could be: four corners, in reading order, plus where it came from."""
+
+    corners: np.ndarray
+    source: str
+    score: float = 0.0
+
+    @property
+    def center(self) -> tuple[float, float]:
+        return float(self.corners[:, 0].mean()), float(self.corners[:, 1].mean())
+
+
+@dataclass
+class Answer:
+    """What the pipeline decided, with enough detail to draw it and to argue about it."""
+
+    has_date: bool
+    score: float
+    threshold: float
+    coins: list[Circle] = field(default_factory=list)
+    candidates: list[Candidate] = field(default_factory=list)
+    best: Candidate | None = None
+    crop: Image.Image | None = None
+
+    @property
+    def top(self) -> list[Candidate]:
+        return sorted(self.candidates, key=lambda item: item.score, reverse=True)[:5]
+
+
+def window_corners(candidate: DateCandidate) -> np.ndarray:
+    """Corners of a ring window's rotated rectangle, in the order the crop expects."""
+    half_arc = 0.5 * float(candidate.arc_span)
+    half_radial = 0.5 * float(candidate.radial_span)
+    angle = np.radians(float(candidate.angle_deg))
+    # the crop rotates by -angle_deg, so the reading direction is (cos, sin) of angle_deg
+    ux, uy = float(np.cos(angle)), float(np.sin(angle))
+    vx, vy = -uy, ux
+    cx, cy = candidate.center
+    corners = [
+        (
+            cx + sx * half_arc * ux + sy * half_radial * vx,
+            cy + sx * half_arc * uy + sy * half_radial * vy,
+        )
+        for sx, sy in ((-1, -1), (1, -1), (1, 1), (-1, 1))
+    ]
+    return np.asarray(corners, dtype=np.float64)
+
+
+def crop_corners(image: Image.Image, corners: np.ndarray, size: tuple[int, int] = CROP_SIZE):
+    """Resample the quadrilateral into an upright crop, x1->x2 running along the reading direction.
+
+    This is the one crop routine of the stage: the ring windows and the detector quads both come
+    through here, so a candidate crops the same way whichever source proposed it.
+    """
+    width, height = size
+    origin = corners[0]
+    a = (corners[1] - origin) / width
+    b = (corners[3] - origin) / height
+    return image.convert("RGB").transform(
+        size,
+        Transform.AFFINE,
+        (a[0], b[0], origin[0], a[1], b[1], origin[1]),
+        resample=Resampling.BICUBIC,
+    )
+
+
+def score_candidates(scorer, image: Image.Image, candidates: Sequence[Candidate]) -> None:
+    """Fill in every candidate's score in one batched call; the scorer wants 160x80 RGB floats."""
+    if not candidates:
+        return
+    crops = np.stack(
+        [
+            np.asarray(crop_corners(image, candidate.corners), dtype=np.float32) / 255.0
+            for candidate in candidates
+        ]
+    )
+    logits = scorer.run(None, {"windows": crops.transpose(0, 3, 1, 2)})[0].reshape(-1)
+    scores = 1.0 / (1.0 + np.exp(-logits.astype(np.float64)))
+    for candidate, score in zip(candidates, scores, strict=True):
+        candidate.score = float(score)
+
+
+def run(
+    image: Image.Image,
+    scorer,
+    detector=None,
+    meta: dict | None = None,
+    threshold: float = 0.1,
+    max_coins: int = 2,
+    top_k_detector: int = 3,
+) -> Answer:
+    """Locate the year: ring sweep plus detector, one ranker, best crop out.
+
+    `detector` is a `coinvision.date_detector.DateDetector`; without it the pipeline degrades to
+    the ring sweep alone, which is the shipped behaviour before the detector existed.
+    """
+    meta = meta or {}
+    sweep = meta.get("sweep", {})
+    bands = tuple(tuple(band) for band in sweep.get("bands", ((0.30, 1.10), (0.60, 1.25))))
+    arc = float(sweep.get("arc_degrees", 46.0))
+    step = float(sweep.get("step_degrees", 11.5))
+
+    gray = to_gray(image)
+    coins = detect_coins(gray, max_coins=max_coins)
+
+    candidates: list[Candidate] = []
+    for circle in coins:
+        for window in ring_windows(circle, arc, step, bands):
+            candidates.append(Candidate(window_corners(window), "ring"))
+    if detector is not None:
+        for quad in detector.quads(image, top_k=top_k_detector):
+            candidates.append(Candidate(np.asarray(quad, dtype=np.float64), "detector"))
+
+    score_candidates(scorer, image, candidates)
+    best = max(candidates, key=lambda item: item.score) if candidates else None
+    score = best.score if best else 0.0
+    return Answer(
+        # nothing to crop is the only refusal the pipeline can justify without labelled negatives
+        has_date=bool(best) and score >= threshold,
+        score=score,
+        threshold=threshold,
+        coins=coins,
+        candidates=candidates,
+        best=best,
+        crop=None if best is None else crop_corners(image, best.corners),
+    )

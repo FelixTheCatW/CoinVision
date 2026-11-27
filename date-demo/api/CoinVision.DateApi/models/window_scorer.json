@@ -41,5 +41,5 @@
     "containment": 0.9,
     "epochs": 40
   },
-  "parity_max_abs_diff": 7.82310962677002e-07
+  "parity_max_abs_diff": 1.9073486328125e-06
 }

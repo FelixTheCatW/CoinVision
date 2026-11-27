@@ -227,3 +227,17 @@ data/
 # Training artifacts: checkpoints are large and reproducible from configs
 runs/
 *.pt
+
+# .NET build output
+bin/
+obj/
+
+# node dependencies
+node_modules/
+
+# Python virtual environments
+.venv/
+venv/
+
+# stray npm install at the repo root (no sources inside)
+/frontend/

@@ -9,7 +9,8 @@ namespace CoinVision.DateApi.Services;
 /// The answer is only "is there a readable date" and the crop the model picked - there is no year
 /// classifier here on purpose, the whole-frame one belongs to the previous experiment.
 /// </summary>
-public sealed class DatePipeline(Localizer localizer, WindowScorer scorer, ILogger<DatePipeline> logger)
+public sealed class DatePipeline(Localizer localizer, WindowScorer scorer, DateDetector detector,
+                                 ILogger<DatePipeline> logger)
 {
     /// <summary>Read from the model's metadata: the cut belongs to the score scale that produced it.</summary>
     public double Threshold => scorer.Meta.Threshold;
@@ -44,6 +45,13 @@ public sealed class DatePipeline(Localizer localizer, WindowScorer scorer, ILogg
             windows.AddRange(localizer.RingWindows(circle, scorer.Meta.ArcDegrees,
                                                    scorer.Meta.StepDegrees, scorer.Meta.Bands));
         }
+
+        // The ring sweep is blind, so it misses the year on about one photo in twelve - mostly on
+        // photos where the detected circle is not the coin. The detector proposes the block
+        // outright, and both kinds of candidate then compete in one ranking.
+        var ringWindows = windows.Count;
+        windows.AddRange(detector.Detect(bitmap));
+        var detectorWindows = windows.Count - ringWindows;
 
         var sweepMs = watch.Elapsed.TotalMilliseconds;
 
@@ -103,8 +111,10 @@ public sealed class DatePipeline(Localizer localizer, WindowScorer scorer, ILogg
             var hasDate = bestScore >= Threshold;
 
             logger.LogInformation(
-                "{File} {Width}x{Height}: {Coins} coin(s), {Windows} window(s), best {Score:F3} -> {HasDate}",
-                fileName, width, height, circles.Count, windows.Count, bestScore, hasDate);
+                "{File} {Width}x{Height}: {Coins} coin(s), {Windows} window(s) " +
+                "({Ring} ring + {Detected} detector), best {Score:F3} from {Source} -> {HasDate}",
+                fileName, width, height, circles.Count, windows.Count, ringWindows,
+                detectorWindows, bestScore, best >= 0 ? windows[best].Source : "-", hasDate);
 
             total.Stop();
             return new DetectResponse(

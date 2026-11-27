@@ -19,7 +19,8 @@ public sealed record Window(
     int X0,
     int Y0,
     int X1,
-    int Y1);
+    int Y1,
+    string Source = "ring");
 
 /// <summary>
 /// Port of `src/coinvision/localize.py`: gradient-vote circle centres, a rim radius per centre, the
