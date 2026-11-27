@@ -34,8 +34,9 @@ STD = [0.229, 0.224, 0.225]
 class DeployReader(torch.nn.Module):
     """The reader with its normalisation baked in, so ONNX takes plain RGB in [0, 1].
 
-    The demo already feeds the window scorer that way (its graph bakes in the (x - 0.5) shift), and a
-    caller that forgets the mean/std would otherwise read garbage without any error to show for it.
+    The demo already feeds the window scorer that way (its graph bakes in the (x - 0.5) shift),
+    and a caller that forgets the mean/std would otherwise read garbage without any error to show
+    for it.
     """
 
     def __init__(self, model: torch.nn.Module) -> None:
