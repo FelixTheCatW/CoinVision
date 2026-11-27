@@ -25,6 +25,7 @@ public sealed record TimingDto(
     double Sweep,
     double Crop,
     double Score,
+    double Read,
     double Total);
 
 /// <summary>The answer for one uploaded image.</summary>
@@ -45,7 +46,12 @@ public sealed record DetectResponse(
     IReadOnlyList<CoinDto> Coins,
     int WindowCount,
     IReadOnlyList<WindowDto> TopWindows,
-    TimingDto? TimingMs);
+    TimingDto? TimingMs,
+    string? Year = null,
+    double YearConfidence = 0,
+    string? ReaderCropPng = null,
+    IReadOnlyList<double>? YearDigits = null,
+    bool ReaderFromDetector = false);
 
 /// <summary>What the service is running, for the header of the page.</summary>
 public sealed record InfoResponse(

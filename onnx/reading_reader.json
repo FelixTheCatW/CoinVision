@@ -7,7 +7,12 @@
     "dtype": "float32",
     "width": 448,
     "height": 224,
+    "range": [
+      0.0,
+      1.0
+    ],
     "resize": "bilinear antialias, stretch to width x height",
+    "normalisation": "ImageNet mean/std baked into the graph",
     "mean": [
       0.485,
       0.456,
@@ -34,32 +39,32 @@
     {
       "file": "reading_reader_0.onnx",
       "source": "runs/reading/fold0/best.pt",
-      "size_bytes": 44782583,
-      "max_abs_diff": 8.344650268554688e-07
+      "size_bytes": 44783991,
+      "max_abs_diff": 7.152557373046875e-07
     },
     {
       "file": "reading_reader_1.onnx",
       "source": "runs/reading/fold1/best.pt",
-      "size_bytes": 44782583,
-      "max_abs_diff": 9.5367431640625e-07
+      "size_bytes": 44783991,
+      "max_abs_diff": 1.1920928955078125e-06
     },
     {
       "file": "reading_reader_2.onnx",
       "source": "runs/reading/fold2/best.pt",
-      "size_bytes": 44782583,
+      "size_bytes": 44783991,
       "max_abs_diff": 9.5367431640625e-07
     },
     {
       "file": "reading_reader_3.onnx",
       "source": "runs/reading/fold3/best.pt",
-      "size_bytes": 44782583,
-      "max_abs_diff": 7.152557373046875e-07
+      "size_bytes": 44783991,
+      "max_abs_diff": 5.960464477539062e-07
     },
     {
       "file": "reading_reader_4.onnx",
       "source": "runs/reading/fold4/best.pt",
-      "size_bytes": 44782583,
-      "max_abs_diff": 1.1920928955078125e-06
+      "size_bytes": 44783991,
+      "max_abs_diff": 9.5367431640625e-07
     }
   ],
   "trained_on": {

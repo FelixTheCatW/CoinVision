@@ -5,12 +5,12 @@ using SkiaSharp;
 namespace CoinVision.DateApi.Services;
 
 /// <summary>
-/// The whole demo in five stages: decode, find coins, sweep the rim, score every window, answer.
-/// The answer is only "is there a readable date" and the crop the model picked - there is no year
-/// classifier here on purpose, the whole-frame one belongs to the previous experiment.
+/// The whole demo in six stages: decode, find coins, sweep the rim, score every window, read the year
+/// off the winning box, answer. The answer is "is there a readable date", the crop the model picked,
+/// and - new - the four digits read from the detector's quad.
 /// </summary>
 public sealed class DatePipeline(Localizer localizer, WindowScorer scorer, DateDetector detector,
-                                 ILogger<DatePipeline> logger)
+                                 YearReader reader, ILogger<DatePipeline> logger)
 {
     /// <summary>Read from the model's metadata: the cut belongs to the score scale that produced it.</summary>
     public double Threshold => scorer.Meta.Threshold;
@@ -113,11 +113,54 @@ public sealed class DatePipeline(Localizer localizer, WindowScorer scorer, DateD
             var previewPng = ToBase64(BuildPreview(bitmap, circles, windows, scores, best, topIndices));
             var hasDate = bestScore >= Threshold;
 
+            // The reader needs a tight box, and only the detector proposes one: inside a winning ring
+            // window the year sits 0.35 of the half-width off centre, so a box shrunk about that
+            // centre cuts empty metal (0 of 12 ring wins held the year, 43 of 43 detector wins did).
+            // Reading the winner when it is a ring window is therefore not an option - the best
+            // detector proposal is, and with none at all there is nothing to read.
+            var readerIndex = best >= 0 && windows[best].Source == "detector" ? best : -1;
+            if (readerIndex < 0)
+            {
+                for (var index = 0; index < windows.Count; index++)
+                {
+                    if (windows[index].Source != "detector")
+                    {
+                        continue;
+                    }
+
+                    if (readerIndex < 0 || scores[index] > scores[readerIndex])
+                    {
+                        readerIndex = index;
+                    }
+                }
+            }
+
+            string? year = null;
+            double yearConfidence = 0;
+            string? readerCropPng = null;
+            IReadOnlyList<double>? yearDigits = null;
+            var readMs = 0.0;
+            if (readerIndex >= 0)
+            {
+                watch.Restart();
+                using var readCrop = Localizer.CropWindow(
+                    bitmap, FitAspect(windows[readerIndex], reader.Width / (double)reader.Height),
+                    reader.Width, reader.Height);
+                var reading = reader.Read(readCrop);
+                readMs = watch.Elapsed.TotalMilliseconds;
+                year = reading.Year;
+                yearConfidence = Math.Round(reading.Confidence, 4);
+                yearDigits = reading.Digits.Select(value => Math.Round(value, 4)).ToList();
+                readerCropPng = ToBase64(readCrop);
+            }
+
             logger.LogInformation(
                 "{File} {Width}x{Height}: {Coins} coin(s), {Windows} window(s) " +
-                "({Ring} ring + {Detected} detector), best {Score:F3} from {Source} -> {HasDate}",
+                "({Ring} ring + {Detected} detector), best {Score:F3} from {Source} -> {HasDate}, " +
+                "year {Year} at {Confidence:F3}",
                 fileName, width, height, circles.Count, windows.Count, ringWindows,
-                detectorWindows, bestScore, best >= 0 ? windows[best].Source : "-", hasDate);
+                detectorWindows, bestScore, best >= 0 ? windows[best].Source : "-", hasDate,
+                year ?? "-", yearConfidence);
 
             total.Stop();
             return new DetectResponse(
@@ -129,7 +172,9 @@ public sealed class DatePipeline(Localizer localizer, WindowScorer scorer, DateD
                 windows.Count, top,
                 new TimingDto(Math.Round(decodeMs, 2), Math.Round(detectMs, 2), Math.Round(sweepMs, 2),
                               Math.Round(cropMs, 2), Math.Round(scoreMs, 2),
-                              Math.Round(total.Elapsed.TotalMilliseconds, 2)));
+                              Math.Round(readMs, 2),
+                              Math.Round(total.Elapsed.TotalMilliseconds, 2)),
+                year, yearConfidence, readerCropPng, yearDigits, readerIndex >= 0);
         }
         finally
         {
@@ -138,6 +183,26 @@ public sealed class DatePipeline(Localizer localizer, WindowScorer scorer, DateD
                 crop.Dispose();
             }
         }
+    }
+
+    /// <summary>
+    /// Grow the rectangle's shorter side to the reader's aspect. The reader only ever saw 2:1 crops,
+    /// so stretching a 1.4:1 detector quad into that shape would feed it digits with the wrong width.
+    /// </summary>
+    private static Window FitAspect(Window window, double aspect)
+    {
+        var arc = window.ArcSpan;
+        var radial = window.RadialSpan;
+        if (arc / radial < aspect)
+        {
+            arc = radial * aspect;
+        }
+        else
+        {
+            radial = arc / aspect;
+        }
+
+        return window with { ArcSpan = arc, RadialSpan = radial };
     }
 
     private static float[] ToGray(SKBitmap bitmap)

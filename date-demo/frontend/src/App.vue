@@ -22,6 +22,7 @@ const stages = computed(() => {
     ['Разметка окон', t.sweep],
     ['Кропы окон', t.crop],
     ['Скорер', t.score],
+    ['Чтение года', t.read],
     ['Итого', t.total],
   ]
 })
@@ -87,6 +88,10 @@ function cropSrc(payload) {
   return payload?.cropPng ? `data:image/png;base64,${payload.cropPng}` : null
 }
 
+function readerSrc(payload) {
+  return payload?.readerCropPng ? `data:image/png;base64,${payload.readerCropPng}` : null
+}
+
 function previewSrc(payload) {
   return payload?.previewPng ? `data:image/png;base64,${payload.previewPng}` : null
 }
@@ -113,7 +118,8 @@ onUnmounted(() => {
       <p>
         Загрузите фотографию монеты. Сервис находит круги монет, размечает кольцо на окна,
         скорер выбирает окно, в котором год помещается целиком, и отдаёт его кроп.
-        Классификатора года здесь нет: показываем только «есть/нет даты» и вырезанную область.
+        Дальше читатель, обученный на кропах детектора, называет четыре цифры года —
+        вместе с уверенностью и тем кропом, который он видел.
       </p>
     </header>
 
@@ -155,6 +161,26 @@ onUnmounted(() => {
       </section>
 
       <section class="panel">
+        <h2>Год на монете</h2>
+        <div v-if="result.year" class="year">
+          <div>
+            <div class="digits">{{ result.year }}</div>
+            <div class="sub">
+              уверенность {{ (result.yearConfidence * 100).toFixed(0) }}% ·
+              {{ result.readerFromDetector ? 'квад детектора' : 'квада нет' }}
+            </div>
+            <div class="digitbars">
+              <i v-for="(p, index) in result.yearDigits" :key="index" :title="p.toFixed(3)">
+                <b :style="{ width: Math.round(p * 100) + '%' }"></b>
+              </i>
+            </div>
+          </div>
+          <img v-if="result.readerCropPng" :src="readerSrc(result)" alt="что прочитал читатель" />
+        </div>
+        <p v-else class="muted">
+          детектор не предложил квад — читать нечего, это фото остаётся за кадровым читателем
+        </p>
+
         <h2>Вердикт</h2>
         <div class="verdict" :class="verdictClass">
           <span class="dot"></span>

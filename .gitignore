@@ -241,3 +241,7 @@ venv/
 
 # stray npm install at the repo root (no sources inside)
 /frontend/
+
+# the demo's copy of the reading reader: 5 x 44 MB, and onnx/ already versions the same files.
+# `cp onnx/reading_reader_*.onnx onnx/reading_reader.json date-demo/api/CoinVision.DateApi/models/`
+date-demo/api/CoinVision.DateApi/models/reading_reader_*.onnx
